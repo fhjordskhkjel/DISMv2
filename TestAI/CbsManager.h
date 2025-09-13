@@ -76,6 +76,13 @@ public:
     bool initialize();
     void cleanup();
 
+    // Verbose logging
+    void setVerbose(bool v) { verbose = v; }
+
+    // Optional behaviors
+    void setOfflineImagePath(const std::string& imagePath) { offlineImagePath = imagePath; }
+    void setAllowPowershellFallback(bool allow) { allowPowershellFallback = allow; }
+
     // CBS Package Analysis
     std::optional<CbsPackageInfo> analyzePackage(const std::string& packagePath);
     std::optional<CbsPackageInfo> analyzeExtractedPackage(const std::string& extractedDir);
@@ -118,7 +125,7 @@ public:
     bool verifyComponentSignature(const std::string& componentPath);
     
     // System File Protection Integration
-    bool disableWrp(); // Windows Resource Protection
+    bool disableWrp();
     bool enableWrp();
     bool bypassWrpForInstall(const std::vector<std::string>& filePaths);
     
@@ -146,6 +153,9 @@ private:
     std::string errorLog;
     bool initialized;
     bool systemOnline;
+    bool verbose = false;
+    bool allowPowershellFallback = true;
+    std::string offlineImagePath;
     CbsTransactionState transactionState;
     std::optional<std::string> logFilePath;
     mutable std::mutex errorLogMutex;
@@ -190,6 +200,9 @@ private:
     // Error handling helpers
     void setLastError(const std::string& error);
     void appendToErrorLog(const std::string& logEntry);
+
+    // Path normalization helper
+    std::string toAbsolutePath(const std::string& path);
     
     // System interaction
     bool notifyTrustedInstaller(const std::vector<std::string>& operations);

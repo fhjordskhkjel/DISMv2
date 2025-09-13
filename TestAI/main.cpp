@@ -3,6 +3,7 @@
 #include <vector>
 #include <algorithm>
 #include <fstream>
+#include <filesystem>
 #include "CabHandler.h"
 #include "PackageSupersedenceManager.h"
 #include "PackageSupersedenceManagerSimple.h"
@@ -10,6 +11,7 @@
 #include "PsfWimHandler.h"
 
 using namespace WindowsInstallationEnhancement::Simple;
+namespace fs = std::filesystem;
 
 namespace {
     struct GlobalOptions {
@@ -17,6 +19,41 @@ namespace {
         std::string logPath;
         bool verbose = false;
     } g_opts;
+
+    // Resolve package path: absolute, search exe dir if needed
+    std::string resolvePackagePath(const std::string& original) {
+        try {
+            fs::path p(original);
+            if (p.is_absolute() && fs::exists(p)) return p.string();
+            // Try current directory
+            fs::path abs = fs::absolute(p);
+            if (fs::exists(abs)) return abs.string();
+            // Try executable directory
+            char buf[MAX_PATH] = {};
+            if (GetModuleFileNameA(NULL, buf, MAX_PATH) > 0) {
+                fs::path exeDir = fs::path(buf).parent_path();
+                fs::path candidate = exeDir / p.filename();
+                if (fs::exists(candidate)) return candidate.string();
+            }
+            return original;
+        } catch (...) { return original; }
+    }
+
+    bool validateOfflineImagePath(const std::string& imagePath, std::string& reason) {
+        try {
+            fs::path root(imagePath);
+            if (!fs::exists(root)) { reason = "Image path does not exist"; return false; }
+            if (!fs::is_directory(root)) { reason = "Image path is not a directory"; return false; }
+            fs::path winsxs = root / "Windows" / "WinSxS";
+            fs::path servicing = root / "Windows" / "servicing" / "Packages";
+            if (!fs::exists(winsxs)) { reason = ("Missing: " + winsxs.string()); return false; }
+            if (!fs::exists(servicing)) { reason = ("Missing: " + servicing.string()); return false; }
+            return true;
+        } catch (const std::exception& ex) {
+            reason = ex.what();
+            return false;
+        }
+    }
 
     void applyGlobalOptions(CbsManager* cbs = nullptr) {
         if (!g_opts.tempDir.empty()) {
@@ -302,7 +339,7 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             
-            supersedenceManager.enableVerboseLogging(true);
+            // Verbose flag is not supported in this manager API; using global output only
             
             auto manifests = supersedenceManager.parseManifestDirectory(manifestDir);
             
@@ -570,9 +607,7 @@ int main(int argc, char* argv[]) {
                 }
                 std::cout << "\n";
                 std::cout << "   Reason: " << recommendation.reason << "\n";
-                if (recommendation.requiresRestart) {
-                    std::cout << "   [WARNING] Restart Required\n";
-                }
+                if (recommendation.requiresRestart) std::cout << "   [WARNING] Restart Required\n";
                 std::cout << "\n";
             }
             
@@ -619,6 +654,8 @@ int main(int argc, char* argv[]) {
             bool onlineMode = true; // Default to online mode
             std::string tempDir;
             std::string logFile;
+            std::string imagePath; // NEW: offline image path for future extract scenarios
+            bool noPowerShell = false; // NEW: disable generic PowerShell fallback
             
             // Parse DISM-style parameters
             if (packagePath.find("/PackagePath:") == 0) {
@@ -631,7 +668,7 @@ int main(int argc, char* argv[]) {
                 packagePath = extractedDir; // For display purposes
             }
             
-            // Parse additional options (support both /CBS and --cbs-integration syntax)
+            // Parse additional options
             for (int i = 3; i < argc; i++) {
                 std::string arg = argv[i];
                 if (arg == "--security-validation") {
@@ -646,11 +683,11 @@ int main(int argc, char* argv[]) {
                     onlineMode = true;
                 } else if (arg == "/Offline") {
                     onlineMode = false;
+                } else if (arg.rfind("/Image:", 0) == 0) {
+                    imagePath = arg.substr(7);
                 } else if (arg.find("/PackagePath:") == 0 && i == 3) {
-                    // Handle case where /PackagePath: comes as a separate argument instead of being the second argument
                     packagePath = arg.substr(13);
                 } else if (arg.find("/ExtractedDir:") == 0 && i == 3) {
-                    // Handle case where /ExtractedDir: comes as a separate argument
                     extractedDir = arg.substr(14);
                     useExtractedDir = true;
                     packagePath = extractedDir;
@@ -659,15 +696,32 @@ int main(int argc, char* argv[]) {
                 } else if (arg == "--log" && i + 1 < argc) {
                     logFile = argv[++i];
                 } else if (arg == "--verbose") {
-                    // Verbose flag, no value needed
+                    // already handled globally
+                } else if (arg == "--no-powershell") {
+                    noPowerShell = true;
                 }
             }
-            
-            // Set default temp directory if not configured
-            if (tempDir.empty()) {
-                tempDir = "C:\\Temp";
+
+            // Normalize input package/extracted dir
+            std::string userInputPath = packagePath;
+            if (!useExtractedDir) {
+                packagePath = resolvePackagePath(packagePath);
+            } else {
+                extractedDir = resolvePackagePath(extractedDir);
             }
-            
+
+            if (!useExtractedDir && !fs::exists(packagePath)) {
+                std::cerr << "[FAILED] Package not found: " << userInputPath << "\n";
+                std::cerr << "Resolved path: " << packagePath << "\n";
+                std::cerr << "Hint: Provide full absolute path, or place the file next to the EXE." << "\n";
+                return 1;
+            }
+            if (useExtractedDir && !fs::exists(extractedDir)) {
+                std::cerr << "[FAILED] Extracted directory not found: " << userInputPath << "\n";
+                std::cerr << "Resolved path: " << extractedDir << "\n";
+                return 1;
+            }
+
             std::cout << "Enhanced Package Addition (Phase 2)\n";
             std::cout << "======================================\n";
             std::cout << (useExtractedDir ? "Extracted Directory: " : "Package: ") << packagePath << "\n";
@@ -677,17 +731,35 @@ int main(int argc, char* argv[]) {
             std::cout << "CBS Integration: " << (cbsIntegration ? "[ENABLED]" : "[SIMPLIFIED]") << "\n";
             std::cout << "Installation Mode: " << (useExtractedDir ? "EXTRACTED DIRECTORY" : "PACKAGE FILE") << "\n";
             std::cout << "Online Mode: " << (onlineMode ? "ONLINE" : "OFFLINE") << "\n";
+            if (!imagePath.empty()) {
+                std::cout << "Offline Image: " << imagePath << "\n";
+            }
             std::cout << "Temp Directory: " << tempDir << "\n";
             if (!logFile.empty()) {
                 std::cout << "Log File: " << logFile << "\n";
             }
+            if (noPowerShell) {
+                std::cout << "PowerShell Fallback: [DISABLED]\n";
+            }
             std::cout << "\n";
-            
+
+            if (!onlineMode) {
+                if (imagePath.empty()) {
+                    std::cerr << "[FAILED] Offline mode requires /Image:<path> to a mounted Windows image.\n";
+                    return 1;
+                }
+                std::string reason;
+                if (!validateOfflineImagePath(imagePath, reason)) {
+                    std::cerr << "[FAILED] Offline image path invalid: " << reason << "\n";
+                    return 1;
+                }
+            }
+
             // CBS Integration Path
             if (cbsIntegration) {
                 std::cout << "=== Component-Based Servicing (CBS) Integration Mode ===\n";
                 std::cout << "Installation Target: " << (onlineMode ? "Live System (Online)" : "Offline Image") << "\n\n";
-                
+
                 if (dryRun) {
                     std::cout << "*** DRY RUN MODE - CBS operations will be simulated ***\n\n";
                     std::cout << "CBS Operations that would be performed:\n";
@@ -710,7 +782,6 @@ int main(int argc, char* argv[]) {
                     std::cout << "Package would be installed using Windows Component-Based Servicing\n";
                     std::cout << "Target: " << (onlineMode ? "Live System" : "Offline Windows Image") << "\n";
                 } else {
-                    
                     CbsManager cbsManager;
                     if (!cbsManager.initialize()) {
                         std::cerr << "[FAILED] Failed to initialize CBS Manager\n";
@@ -718,7 +789,9 @@ int main(int argc, char* argv[]) {
                         return 1;
                     }
 
-                    // Apply global options (temp-dir/log/verbose)
+                    cbsManager.setVerbose(g_opts.verbose);
+                    cbsManager.setAllowPowershellFallback(!noPowerShell);
+                    if (!imagePath.empty()) cbsManager.setOfflineImagePath(imagePath);
                     applyGlobalOptions(&cbsManager);
                     
                     std::cout << "[SUCCESS] CBS Manager initialized successfully\n";
@@ -756,7 +829,7 @@ int main(int argc, char* argv[]) {
                     }
                     
                     if (result.success) {
-                        std::cout << "[SUCCESS] CBS-integrated installation completed successfully!\n\n";
+                        std::cout << "[SUCCESS] CBS-integrated installation completed successfully!\n";
                         std::cout << "=== Installation Results ===\n";
                         std::cout << "Installation Mode: " << (onlineMode ? "Online" : "Offline") << "\n";
                         std::cout << "Installed Components: " << result.installedComponents.size() << "\n";
