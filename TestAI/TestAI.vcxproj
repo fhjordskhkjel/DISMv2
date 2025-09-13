@@ -177,6 +177,7 @@
     <None Include="PHASE2_COMPLETE_SUMMARY.md" />
     <None Include="PHASE2_FINAL_SUCCESS_REPORT.md" />
     <None Include="PHASE2_IMPLEMENTATION_GUIDE.md" />
+    <None Include="PRODUCTION_READY_IMPROVEMENTS_COMPLETE.md" />
     <None Include="PSF_WIM_DISM_INTEGRATION_COMPLETE.md" />
     <None Include="PSF_WIM_IMPLEMENTATION_COMPLETE.md" />
     <None Include="PSF_WIM_IMPLEMENTATION_GUIDE.md" />

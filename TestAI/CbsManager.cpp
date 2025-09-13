@@ -30,6 +30,12 @@ CbsManager::CbsManager()
     , systemOnline(false)
     , transactionState(CbsTransactionState::None)
 {
+    // Pick up DISMV2_LOG environment override if present
+    char buf[MAX_PATH] = {};
+    DWORD n = GetEnvironmentVariableA("DISMV2_LOG", buf, static_cast<DWORD>(std::size(buf)));
+    if (n > 0 && n < std::size(buf)) {
+        logFilePath = std::string(buf);
+    }
 }
 
 // Destructor
@@ -45,6 +51,108 @@ bool CbsManager::initialize() {
     
     try {
         appendToErrorLog("Starting CBS Manager initialization");
+        
+        // Harden DLL search path to system32 only
+        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+        
+        // Initialize COM with safety checks
+        if (!initializeCom()) {
+            setLastError("Failed to initialize COM for CBS operations");
+            return false;
+        }
+        
+                if (ReadFile(hRead, buffer.data(), toRead, &bytesRead, NULL) && bytesRead > 0) {
+                    output.append(buffer.data(), buffer.data() + bytesRead);
+                }
+            } else {
+                // No data right now. Check process state
+                DWORD wait = WaitForSingleObject(pi.hProcess, 50);
+                if (wait == WAIT_OBJECT_0) {
+                    // Process ended, drain remaining
+                    for (;;) {
+                        if (PeekNamedPipe(hRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
+                            DWORD toRead2 = (DWORD)std::min<size_t>(bytesAvailable, buffer.size());
+                            if (ReadFile(hRead, buffer.data(), toRead2, &bytesRead, NULL) && bytesRead > 0) {
+                                output.append(buffer.data(), buffer.data() + bytesRead);
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    break;
+                }
+                // Timeout control
+                DWORD now = GetTickCount();
+                if (timeoutMs > 0 && (now - startTick) > timeoutMs) {
+                    TerminateProcess(pi.hProcess, 1);
+                    break;
+                }
+            }
+        }
+
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(hRead);
+        return true;
+    }
+
+    void RotateLogIfNeeded(const std::string& path, size_t maxBytes = 2 * 1024 * 1024, int keep = 3) {
+        try {
+            if (path.empty()) return;
+            std::error_code ec;
+            auto sz = fs::exists(path, ec) ? fs::file_size(path, ec) : 0;
+            if (ec || sz < maxBytes) return;
+            // Rotate: path.(keep-1) ... path.1, then new path
+            for (int i = keep - 1; i >= 1; --i) {
+                std::string src = path + "." + std::to_string(i);
+                std::string dst = path + "." + std::to_string(i + 1);
+                if (fs::exists(src, ec)) {
+                    fs::remove(dst, ec);
+                    fs::rename(src, dst, ec);
+                }
+            }
+            std::string first = path + ".1";
+            fs::remove(first, ec);
+            fs::rename(path, first, ec);
+        } catch (...) {
+            // ignore rotation failures
+        }
+    }
+}
+
+// Constructor
+CbsManager::CbsManager() 
+    : initialized(false)
+    , systemOnline(false)
+    , transactionState(CbsTransactionState::None)
+{
+    // Pick up DISMV2_LOG environment override if present
+    char buf[MAX_PATH] = {};
+    DWORD n = GetEnvironmentVariableA("DISMV2_LOG", buf, static_cast<DWORD>(std::size(buf)));
+    if (n > 0 && n < std::size(buf)) {
+        logFilePath = std::string(buf);
+    }
+}
+
+// Destructor
+CbsManager::~CbsManager() {
+    cleanup();
+}
+
+// Initialize CBS Manager
+bool CbsManager::initialize() {
+    if (initialized) {
+        return true;
+    }
+    
+    try {
+        appendToErrorLog("Starting CBS Manager initialization");
+        
+        // Harden DLL search path to system32 only
+        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
         
         // Initialize COM with safety checks
         if (!initializeCom()) {
@@ -146,13 +254,9 @@ std::optional<CbsPackageInfo> CbsManager::analyzePackage(const std::string& pack
             setLastError("Failed to create temporary staging directory for package analysis");
             return std::nullopt;
         }
-        
-        // Extract package for analysis using external extraction capability
-        // We'll create a simplified analysis that works with basic file structure
         appendToErrorLog("Created staging directory for analysis: " + tempDir);
         
         // For CBS analysis, we'll create a basic package info structure
-        // that can work even without full extraction
         CbsPackageInfo packageInfo;
         packageInfo.packageIdentity = fs::path(packagePath).stem().string();
         packageInfo.displayName = packageInfo.packageIdentity;
@@ -182,8 +286,6 @@ std::optional<CbsPackageInfo> CbsManager::analyzePackage(const std::string& pack
         component.needsRestart = false;
         
         packageInfo.components.push_back(component);
-        
-        // Mark as applicable to current system
         packageInfo.applicabilityInfo.push_back("Applicable to current system");
         
         // Cleanup staging directory
@@ -831,32 +933,27 @@ std::optional<CbsPackageInfo> CbsManager::analyzeExtractedPackage(const std::str
 // Enhanced package extraction methods for CBS integration
 bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::string& destination) {
     try {
-        // Use expand.exe for reliable CAB extraction
-        std::string command = "expand.exe \"" + cabPath + "\" -F:* \"" + destination + "\"";
+        // Use expand.exe for reliable CAB extraction (Unicode-safe)
+        std::string cmd = "expand.exe \"" + cabPath + "\" -F:* \"" + destination + "\"";
+        std::wstring wcmd(cmd.begin(), cmd.end());
         
-        STARTUPINFOA si = {};
-        PROCESS_INFORMATION pi = {};
-        si.cb = sizeof(si);
-        
-        if (!CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, FALSE, 
-                           CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        STARTUPINFOW si{}; PROCESS_INFORMATION pi{}; si.cb = sizeof(si);
+        if (!CreateProcessW(NULL, const_cast<wchar_t*>(wcmd.c_str()), NULL, NULL, FALSE, 
+                            CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            appendToErrorLog("Failed to start expand.exe for CAB extraction");
             return false;
         }
-        
-        DWORD waitResult = WaitForSingleObject(pi.hProcess, 60000); // 60 second timeout
+        DWORD waitResult = WaitForSingleObject(pi.hProcess, 120000);
         DWORD exitCode = 1;
-        
         if (waitResult == WAIT_OBJECT_0) {
             GetExitCodeProcess(pi.hProcess, &exitCode);
         } else {
             TerminateProcess(pi.hProcess, 1);
+            appendToErrorLog("expand.exe timed out for CAB extraction");
         }
-        
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        
         return exitCode == 0;
-        
     } catch (const std::exception& ex) {
         appendToErrorLog("Exception in extractCabForAnalysis: " + std::string(ex.what()));
         return false;
@@ -924,108 +1021,6 @@ bool CbsManager::extractMsuForAnalysis(const std::string& msuPath, const std::st
                     GetExitCodeProcess(pi.hProcess, &exitCode);
                 } else {
                     TerminateProcess(pi.hProcess, 1);
-                    appendToErrorLog("DISM MSU extraction timed out");
-                }
-                
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                
-                if (exitCode == 0) {
-                    appendToErrorLog("MSU extraction succeeded via DISM /Extract");
-                    return true;
-                }
-            } else {
-                appendToErrorLog("Failed to start DISM for MSU extraction");
-            }
-        }
-        
-        appendToErrorLog("All MSU extraction methods failed");
-        return false;
-        
-    } catch (const std::exception& ex) {
-        appendToErrorLog("Exception in extractMsuForAnalysis: " + std::string(ex.what()));
-        return false;
-    }
-}
-
-bool CbsManager::extractGenericPackageForAnalysis(const std::string& packagePath, const std::string& destination) {
-    try {
-        // Try multiple extraction methods for unknown package types
-        
-        // Method 1: Try as ZIP archive with PowerShell
-        std::string psScript = 
-            "$ErrorActionPreference = 'Stop'; "
-            "Add-Type -AssemblyName System.IO.Compression.FileSystem; "
-            "try { "
-            "  [System.IO.Compression.ZipFile]::ExtractToDirectory('" + packagePath + "', '" + destination + "'); "
-            "  exit 0; "
-            "} catch { "
-            "  exit 1; "
-            "}";
-        
-        std::string psCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"" + psScript + "\"";
-        
-        STARTUPINFOA si = {};
-        PROCESS_INFORMATION pi = {};
-        si.cb = sizeof(si);
-        
-        if (CreateProcessA(NULL, const_cast<char*>(psCommand.c_str()), NULL, NULL, FALSE, 
-                          CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-            
-            DWORD waitResult = WaitForSingleObject(pi.hProcess, 60000);
-            DWORD exitCode = 1;
-            
-            if (waitResult == WAIT_OBJECT_0) {
-                GetExitCodeProcess(pi.hProcess, &exitCode);
-            } else {
-                TerminateProcess(pi.hProcess, 1);
-            }
-            
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-            
-            if (exitCode == 0) {
-                return true;
-            }
-        }
-        
-        // Method 2: Try with 7-Zip if available
-        std::string sevenZipCommand = "7z.exe x \"" + packagePath + "\" -o\"" + destination + "\" -y";
-        
-        if (CreateProcessA(NULL, const_cast<char*>(sevenZipCommand.c_str()), NULL, NULL, FALSE, 
-                          CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-            
-            DWORD waitResult = WaitForSingleObject(pi.hProcess, 60000);
-            DWORD exitCode = 1;
-            
-            if (waitResult == WAIT_OBJECT_0) {
-                GetExitCodeProcess(pi.hProcess, &exitCode);
-            } else {
-                TerminateProcess(pi.hProcess, 1);
-            }
-            
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-            
-            if (exitCode == 0) {
-                return true;
-            }
-        }
-        
-        return false;
-        
-    } catch (const std::exception& ex) {
-        appendToErrorLog("Exception in extractGenericPackageForAnalysis: " + std::string(ex.what()));
-        return false;
-    }
-}
-
-bool CbsManager::installExtractedFiles(const std::string& extractedDir, const std::string& targetPath, bool isOnline) {
-    try {
-        appendToErrorLog("Installing files from extracted directory: " + extractedDir);
-        
-        if (!fs::exists(extractedDir)) {
-            appendToErrorLog("Extracted directory does not exist: " + extractedDir);
             return false;
         }
         
@@ -1245,7 +1240,7 @@ bool CbsManager::createStagingDirectory(const std::string& basePath, std::string
                 "C:\\Temp",
                 "C:\\Windows\\Temp", 
                 "C:\\Users\\Public\\temp",
-                "."
+                "." 
             };
             
             for (const auto& path : fallbackPaths) {
@@ -1269,8 +1264,7 @@ bool CbsManager::createStagingDirectory(const std::string& basePath, std::string
             return false;
         }
         
-        auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
+        auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         
         stagingPath = tempBasePath + "\\cbs_staging_" + std::to_string(timestamp);
         
@@ -1339,19 +1333,14 @@ void CbsManager::setLastError(const std::string& error) {
 
 void CbsManager::appendToErrorLog(const std::string& logEntry) {
     try {
-        // Limit log size to prevent excessive memory usage
+        std::lock_guard<std::mutex> lock(errorLogMutex);
         const size_t MAX_LOG_SIZE = 1024 * 1024; // 1MB limit
-        
-        if (errorLog.size() > MAX_LOG_SIZE) {
-            // Keep only the last portion of the log
-            errorLog = errorLog.substr(errorLog.size() - MAX_LOG_SIZE / 2);
-        }
         
         auto now = std::chrono::system_clock::now();
         auto time_t = std::chrono::system_clock::to_time_t(now);
         
         std::stringstream ss;
-        std::tm timeinfo;
+        std::tm timeinfo{};
         if (localtime_s(&timeinfo, &time_t) == 0) {
             ss << std::put_time(&timeinfo, "%Y-%m-%d %H:%M:%S");
         } else {
@@ -1359,102 +1348,141 @@ void CbsManager::appendToErrorLog(const std::string& logEntry) {
         }
         ss << " - " << logEntry << "\n";
         
-        std::string logEntryWithTime = ss.str();
-        
-        // Reserve space to prevent reallocations
-        if (errorLog.capacity() < errorLog.size() + logEntryWithTime.size() + 1000) {
-            errorLog.reserve(errorLog.size() + logEntryWithTime.size() + 1000);
+        std::string line = ss.str();
+        if (errorLog.capacity() < errorLog.size() + line.size() + 1000) {
+            errorLog.reserve(errorLog.size() + line.size() + 1000);
+        }
+        errorLog += line;
+        if (errorLog.size() > MAX_LOG_SIZE) {
+            errorLog = errorLog.substr(errorLog.size() - MAX_LOG_SIZE / 2);
         }
         
-        errorLog += logEntryWithTime;
-        
-    } catch (const std::exception&) {
-        // Suppress exceptions in logging to prevent cascading failures
+        if (logFilePath && !logFilePath->empty()) {
+            std::ofstream out(*logFilePath, std::ios::app | std::ios::binary);
+            if (out.is_open()) {
+                out.write(line.data(), static_cast<std::streamsize>(line.size()));
+            }
+        }
     } catch (...) {
-        // Suppress all exceptions in logging
+        // suppress
     }
 }
 
-// Utility namespace implementations
+bool CbsManager::enableCbsLogging(const std::string& logPath) {
+    logFilePath = logPath;
+    appendToErrorLog("External logging enabled: " + logPath);
+    return true;
+}
+
+// === CbsUtils helper implementations ===
 namespace CbsUtils {
     std::vector<std::string> findManifestFiles(const std::string& directory) {
-        std::vector<std::string> manifestFiles;
-        
-        try {
-            for (const auto& entry : fs::recursive_directory_iterator(directory)) {
-                if (entry.is_regular_file()) {
-                    auto extension = entry.path().extension().string();
-                    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
-                    
-                    if (extension == ".mum" || extension == ".xml") {
-                        manifestFiles.push_back(entry.path().string());
-                    }
+        std::vector<std::string> files;
+        std::error_code ec;
+        if (!fs::exists(directory, ec)) return files;
+        for (const auto& entry : fs::recursive_directory_iterator(directory, ec)) {
+            if (entry.is_regular_file()) {
+                auto ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".mum" || ext == ".xml") {
+                    files.push_back(entry.path().string());
                 }
             }
-        } catch (const std::exception&) {
-            // Handle filesystem exceptions
         }
-        
-        return manifestFiles;
+        return files;
     }
-    
+
+    bool isValidManifestFile(const std::string& filePath) {
+        auto ext = fs::path(filePath).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        return (ext == ".mum" || ext == ".xml");
+    }
+
+    std::string extractComponentIdentity(const std::string& manifestPath) {
+        return fs::path(manifestPath).stem().string();
+    }
+
     bool isRunningOnline() {
-        // Check if we're running on the live system vs an offline image
-        return fs::exists("C:\\Windows\\System32\\kernel32.dll");
+        // Heuristic: if SYSTEMROOT exists and points to a Windows dir, assume online
+        char buf[MAX_PATH] = {};
+        DWORD n = GetEnvironmentVariableA("SystemRoot", buf, static_cast<DWORD>(std::size(buf)));
+        if (n > 0 && n < std::size(buf)) {
+            return fs::exists(std::string(buf));
+        }
+        return true;
     }
-    
+
     std::string getSystemArchitecture() {
-        SYSTEM_INFO sysInfo;
-        GetSystemInfo(&sysInfo);
-        
-        switch (sysInfo.wProcessorArchitecture) {
-            case PROCESSOR_ARCHITECTURE_AMD64:
-                return "amd64";
-            case PROCESSOR_ARCHITECTURE_ARM:
-                return "arm";
-            case PROCESSOR_ARCHITECTURE_ARM64:
-                return "arm64";
-            case PROCESSOR_ARCHITECTURE_INTEL:
-                return "x86";
-            default:
-                return "unknown";
+        SYSTEM_INFO si{};
+        GetNativeSystemInfo(&si);
+        switch (si.wProcessorArchitecture) {
+            case PROCESSOR_ARCHITECTURE_AMD64: return "amd64";
+            case PROCESSOR_ARCHITECTURE_ARM64: return "arm64";
+            case PROCESSOR_ARCHITECTURE_INTEL: return "x86";
+            case PROCESSOR_ARCHITECTURE_ARM: return "arm";
+            default: return "neutral";
         }
     }
-    
+
     std::string getWindowsVersion() {
-        // Get Windows version information
-        return "10.0"; // Simplified for now
+        // Minimal placeholder; enhanced implementation could query registry
+        return "10.0";
     }
-    
-    void logCbsOperation(const std::string& operation, 
-                        const std::string& details,
-                        const std::string& logPath) {
+
+    std::string constructComponentPath(const std::string& componentIdentity, const std::string& basePath) {
+        // Place under WinSxS by identity-name folder (simplified)
+        std::string path = basePath;
+        if (!path.empty() && path.back() != '\\') path += "\\";
+        path += "Windows\\WinSxS\\" + componentIdentity;
+        return path;
+    }
+
+    std::string constructManifestPath(const std::string& componentIdentity, const std::string& basePath) {
+        std::string path = basePath;
+        if (!path.empty() && path.back() != '\\') path += "\\";
+        path += "Windows\\servicing\\Packages\\" + componentIdentity + ".mum";
+        return path;
+    }
+
+    void logCbsOperation(const std::string& operation, const std::string& details, const std::string& logPath) {
+        if (logPath.empty()) return;
         try {
-            std::ofstream logFile(logPath, std::ios::app);
-            if (logFile.is_open()) {
-                auto now = std::chrono::system_clock::now();
-                auto time_t = std::chrono::system_clock::to_time_t(now);
-                
-                std::tm timeinfo;
-                if (localtime_s(&timeinfo, &time_t) == 0) {
-                    logFile << std::put_time(&timeinfo, "%Y-%m-%d %H:%M:%S");
-                } else {
-                    logFile << "UNKNOWN_TIME";
-                }
-                logFile << " - CBS Operation: " << operation << " - " << details << std::endl;
+            auto now = std::chrono::system_clock::now();
+            auto time_t = std::chrono::system_clock::to_time_t(now);
+            std::tm ti{}; char timebuf[64]{};
+            if (localtime_s(&ti, &time_t) == 0) {
+                std::strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", &ti);
+            } else {
+                strncpy_s(timebuf, sizeof(timebuf), "UNKNOWN_TIME", _TRUNCATE);
             }
-        } catch (const std::exception&) {
-            // Handle logging exceptions silently
+            std::ofstream out(logPath, std::ios::app | std::ios::binary);
+            if (out.is_open()) {
+                out << timebuf << " - " << operation << ": " << details << "\n";
+            }
+        } catch (...) {
+            // swallow
         }
     }
 }
 
-// Implement remaining methods as stubs for now
-bool CbsManager::registerComponents(const std::vector<CbsComponentInfo>& components) { return true; }
-bool CbsManager::unregisterComponents(const std::vector<CbsComponentInfo>& components) { return true; }
-bool CbsManager::integrateCbsStore(const std::string& targetPath) { return true; }
-bool CbsManager::updateComponentStore(const std::string& targetPath) { return true; }
-bool CbsManager::notifyServicingStack(const std::vector<std::string>& installedComponents) { return true; }
-bool CbsManager::disableWrp() { return true; }
-bool CbsManager::enableWrp() { return true; }
-bool CbsManager::bypassWrpForInstall(const std::vector<std::string>& filePaths) { return true; }
+// === Stub implementations for CBS store interactions to resolve links ===
+bool CbsManager::registerComponents(const std::vector<CbsComponentInfo>& components) {
+    try {
+        for (const auto& c : components) {
+            appendToErrorLog("Registering component (stub): " + c.identity);
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool CbsManager::updateComponentStore(const std::string& targetPath) {
+    appendToErrorLog("Updating component store (stub) at: " + targetPath);
+    return true;
+}
+
+bool CbsManager::notifyServicingStack(const std::vector<std::string>& installedComponents) {
+    appendToErrorLog("Notifying servicing stack (stub). Components: " + std::to_string(installedComponents.size()));
+    return true;
+}

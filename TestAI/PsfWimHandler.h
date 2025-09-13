@@ -16,14 +16,8 @@ enum class PackageType {
     WIM
 };
 
-// Structure for WIM image information
-struct WimImageInfo {
-    int index = 0;
-    std::string name;
-    std::string description;
-    std::string architecture;
-    uint64_t size = 0;
-};
+// Forward declaration of WimImageInfo (defined in CabHandler.h)
+struct WimImageInfo;
 
 // Main PSF/WIM Handler class using proper Windows APIs
 class PsfWimHandler {

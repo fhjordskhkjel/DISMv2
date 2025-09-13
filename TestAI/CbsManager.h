@@ -8,6 +8,7 @@
 #include <functional>
 #include <unordered_map>
 #include <windows.h>
+#include <mutex>
 
 // COM and CBS related includes
 #include <comdef.h>
@@ -128,13 +129,12 @@ public:
     // Error Handling and Logging
     std::optional<std::string> getLastError() const { return lastError; }
     std::string getDetailedErrorLog() const { return errorLog; }
+    bool enableCbsLogging(const std::string& logPath);
     
     // Utility Functions
     bool isSystemOnline() const { return systemOnline; }
     void setSystemOnline(bool online) { systemOnline = online; }
-    
     std::string getCbsLogPath() const;
-    bool enableCbsLogging(const std::string& logPath);
     
     // Component Enumeration
     std::vector<CbsComponentInfo> enumerateInstalledComponents(const std::string& targetPath);
@@ -147,6 +147,8 @@ private:
     bool initialized;
     bool systemOnline;
     CbsTransactionState transactionState;
+    std::optional<std::string> logFilePath;
+    mutable std::mutex errorLogMutex;
     
     // COM interfaces for CBS
     CComPtr<IUnknown> cbsSession;

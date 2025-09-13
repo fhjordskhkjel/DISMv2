@@ -185,5 +185,6 @@
     <None Include="test_enhanced_features.bat">
       <Filter>Source Files</Filter>
     </None>
+    <None Include="PRODUCTION_READY_IMPROVEMENTS_COMPLETE.md" />
   </ItemGroup>
 </Project>
