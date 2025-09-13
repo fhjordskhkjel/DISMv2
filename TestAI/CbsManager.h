@@ -76,6 +76,15 @@ public:
     bool initialize();
     void cleanup();
 
+    // Verbose logging
+    void setVerbose(bool v) { verbose = v; }
+
+    // Optional behaviors
+    void setOfflineImagePath(const std::string& imagePath) { offlineImagePath = imagePath; }
+    void setAllowPowershellFallback(bool allow) { allowPowershellFallback = allow; }
+    void setAllowWusaFallback(bool allow) { allowWusaFallback = allow; }
+    void setAllow7zFallback(bool allow) { allow7zFallback = allow; }
+
     // CBS Package Analysis
     std::optional<CbsPackageInfo> analyzePackage(const std::string& packagePath);
     std::optional<CbsPackageInfo> analyzeExtractedPackage(const std::string& extractedDir);
@@ -118,7 +127,7 @@ public:
     bool verifyComponentSignature(const std::string& componentPath);
     
     // System File Protection Integration
-    bool disableWrp(); // Windows Resource Protection
+    bool disableWrp();
     bool enableWrp();
     bool bypassWrpForInstall(const std::vector<std::string>& filePaths);
     
@@ -140,12 +149,21 @@ public:
     std::vector<CbsComponentInfo> enumerateInstalledComponents(const std::string& targetPath);
     std::vector<std::string> getComponentDependencies(const std::string& componentIdentity);
 
+    // Public utilities
+    bool extractMsuTo(const std::string& msuPath, const std::string& destination) { return extractMsuForAnalysis(msuPath, destination); }
+    bool extractCabTo(const std::string& cabPath, const std::string& destination) { return extractCabForAnalysis(cabPath, destination); }
+
 private:
     // Internal state
     std::optional<std::string> lastError;
     std::string errorLog;
     bool initialized;
     bool systemOnline;
+    bool verbose = false;
+    bool allowPowershellFallback = true;
+    bool allowWusaFallback = true;
+    bool allow7zFallback = true;
+    std::string offlineImagePath;
     CbsTransactionState transactionState;
     std::optional<std::string> logFilePath;
     mutable std::mutex errorLogMutex;
@@ -190,15 +208,20 @@ private:
     // Error handling helpers
     void setLastError(const std::string& error);
     void appendToErrorLog(const std::string& logEntry);
+
+    // Path helpers
+    std::string toAbsolutePath(const std::string& path);
+    std::wstring getSystemToolPath(const wchar_t* toolName);
+    bool isUncPath(const std::string& path) const { return path.rfind("\\\\", 0) == 0; }
     
     // System interaction
     bool notifyTrustedInstaller(const std::vector<std::string>& operations);
     bool schedulePostInstallTasks(const std::vector<std::string>& tasks);
-    
+
     // Privilege management
     bool enableRequiredPrivileges();
     bool enableTrustedInstallerPrivileges();
-    
+
     // Constants for CBS operations
     static constexpr const char* CBS_STORE_PATH = "\\Windows\\servicing\\Packages";
     static constexpr const char* CBS_LOG_PATH = "\\Windows\\Logs\\CBS";

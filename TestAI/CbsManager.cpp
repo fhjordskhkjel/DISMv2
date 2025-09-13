@@ -24,69 +24,82 @@
 
 namespace fs = std::filesystem;
 
-// Constructor
-CbsManager::CbsManager() 
-    : initialized(false)
-    , systemOnline(false)
-    , transactionState(CbsTransactionState::None)
-{
-    // Pick up DISMV2_LOG environment override if present
-    char buf[MAX_PATH] = {};
-    DWORD n = GetEnvironmentVariableA("DISMV2_LOG", buf, static_cast<DWORD>(std::size(buf)));
-    if (n > 0 && n < std::size(buf)) {
-        logFilePath = std::string(buf);
+// Helper functions for process execution and log rotation
+namespace {
+    bool IsProcessWow64() {
+        BOOL isWow64 = FALSE;
+        typedef BOOL (WINAPI *FN)(HANDLE, PBOOL);
+        HMODULE h = GetModuleHandleW(L"kernel32.dll");
+        if (!h) return FALSE;
+        auto fn = reinterpret_cast<FN>(GetProcAddress(h, "IsWow64Process"));
+        if (!fn) return FALSE;
+        if (!fn(GetCurrentProcess(), &isWow64)) return FALSE;
+        return isWow64 ? true : false;
     }
-}
 
-// Destructor
-CbsManager::~CbsManager() {
-    cleanup();
-}
+    bool RunProcessCapture(const std::wstring& command, DWORD timeoutMs, std::string& output, DWORD& exitCode) {
+        SECURITY_ATTRIBUTES sa{}; sa.nLength = sizeof(sa); sa.bInheritHandle = TRUE; sa.lpSecurityDescriptor = NULL;
+        HANDLE hRead = NULL, hWrite = NULL;
+        if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return false;
+        SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
 
-// Initialize CBS Manager
-bool CbsManager::initialize() {
-    if (initialized) {
-        return true;
-    }
-    
-    try {
-        appendToErrorLog("Starting CBS Manager initialization");
-        
-        // Harden DLL search path to system32 only
-        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
-        
-        // Initialize COM with safety checks
-        if (!initializeCom()) {
-            setLastError("Failed to initialize COM for CBS operations");
+        STARTUPINFOW si{}; si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = hWrite;
+        si.hStdError  = hWrite;
+        si.hStdInput  = NULL;
+
+        BOOL created = CreateProcessW(NULL, const_cast<wchar_t*>(command.c_str()), NULL, NULL, TRUE,
+                                      CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+        if (!created) {
+            CloseHandle(hRead); CloseHandle(hWrite);
             return false;
         }
-        
+
+        // Create a job so children are also terminated on timeout/cleanup
+        HANDLE hJob = CreateJobObjectW(nullptr, nullptr);
+        if (hJob) {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &info, sizeof(info));
+            AssignProcessToJobObject(hJob, pi.hProcess);
+        }
+
+        CloseHandle(hWrite);
+
+        output.clear();
+        std::string buffer; buffer.resize(4096);
+        DWORD startTick = GetTickCount();
+        DWORD bytesRead = 0; exitCode = 1;
+
+        for (;;) {
+            DWORD bytesAvailable = 0;
+            if (PeekNamedPipe(hRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
+                DWORD toRead = (DWORD)std::min<size_t>(bytesAvailable, buffer.size());
                 if (ReadFile(hRead, buffer.data(), toRead, &bytesRead, NULL) && bytesRead > 0) {
                     output.append(buffer.data(), buffer.data() + bytesRead);
                 }
             } else {
-                // No data right now. Check process state
                 DWORD wait = WaitForSingleObject(pi.hProcess, 50);
                 if (wait == WAIT_OBJECT_0) {
-                    // Process ended, drain remaining
                     for (;;) {
                         if (PeekNamedPipe(hRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
                             DWORD toRead2 = (DWORD)std::min<size_t>(bytesAvailable, buffer.size());
                             if (ReadFile(hRead, buffer.data(), toRead2, &bytesRead, NULL) && bytesRead > 0) {
                                 output.append(buffer.data(), buffer.data() + bytesRead);
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
+                            } else { break; }
+                        } else { break; }
                     }
                     break;
                 }
-                // Timeout control
                 DWORD now = GetTickCount();
                 if (timeoutMs > 0 && (now - startTick) > timeoutMs) {
-                    TerminateProcess(pi.hProcess, 1);
+                    if (hJob) {
+                        TerminateJobObject(hJob, 1);
+                    } else {
+                        TerminateProcess(pi.hProcess, 1);
+                    }
                     break;
                 }
             }
@@ -95,6 +108,7 @@ bool CbsManager::initialize() {
         GetExitCodeProcess(pi.hProcess, &exitCode);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
+        if (hJob) CloseHandle(hJob);
         CloseHandle(hRead);
         return true;
     }
@@ -105,7 +119,6 @@ bool CbsManager::initialize() {
             std::error_code ec;
             auto sz = fs::exists(path, ec) ? fs::file_size(path, ec) : 0;
             if (ec || sz < maxBytes) return;
-            // Rotate: path.(keep-1) ... path.1, then new path
             for (int i = keep - 1; i >= 1; --i) {
                 std::string src = path + "." + std::to_string(i);
                 std::string dst = path + "." + std::to_string(i + 1);
@@ -118,9 +131,38 @@ bool CbsManager::initialize() {
             fs::remove(first, ec);
             fs::rename(path, first, ec);
         } catch (...) {
-            // ignore rotation failures
         }
     }
+
+    std::wstring ToLongPath(const std::wstring& path) {
+        if (path.rfind(L"\\\\?\\", 0) == 0) return path; // already long path
+        if (path.rfind(L"\\\\", 0) == 0) {
+            // UNC -> \\?\UNC\server\share\...
+            return L"\\\\?\\UNC\\" + path.substr(2);
+        }
+        // Drive path
+        return L"\\\\?\\" + path;
+    }
+}
+
+std::wstring CbsManager::getSystemToolPath(const wchar_t* toolName) {
+    wchar_t winDir[MAX_PATH] = {};
+    UINT wlen = GetWindowsDirectoryW(winDir, MAX_PATH);
+    if (wlen == 0 || wlen >= MAX_PATH) {
+        // Fallback to system directory
+        wchar_t sysDir[MAX_PATH] = {};
+        UINT slen = GetSystemDirectoryW(sysDir, MAX_PATH);
+        if (slen == 0 || slen >= MAX_PATH) {
+            return std::wstring(toolName);
+        }
+        return std::wstring(sysDir) + L"\\" + toolName;
+    }
+    bool wow64 = IsProcessWow64();
+    std::wstring base(winDir);
+    if (wow64) {
+        return base + L"\\Sysnative\\" + toolName;
+    }
+    return base + L"\\System32\\" + toolName;
 }
 
 // Constructor
@@ -931,29 +973,41 @@ std::optional<CbsPackageInfo> CbsManager::analyzeExtractedPackage(const std::str
 }
 
 // Enhanced package extraction methods for CBS integration
+std::string CbsManager::toAbsolutePath(const std::string& path) {
+    try {
+        std::error_code ec;
+        fs::path p(path);
+        if (p.is_absolute()) return p.string();
+        auto abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
+        return abs.empty() ? p.string() : abs.string();
+    } catch (...) { return path; }
+}
+
 bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::string& destination) {
     try {
-        // Use expand.exe for reliable CAB extraction (Unicode-safe)
-        std::string cmd = "expand.exe \"" + cabPath + "\" -F:* \"" + destination + "\"";
-        std::wstring wcmd(cmd.begin(), cmd.end());
-        
-        STARTUPINFOW si{}; PROCESS_INFORMATION pi{}; si.cb = sizeof(si);
-        if (!CreateProcessW(NULL, const_cast<wchar_t*>(wcmd.c_str()), NULL, NULL, FALSE, 
-                            CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-            appendToErrorLog("Failed to start expand.exe for CAB extraction");
-            return false;
+        auto in = toAbsolutePath(cabPath);
+        auto out = toAbsolutePath(destination);
+
+        // Copy to local temp if UNC
+        if (isUncPath(in)) {
+            std::string staging;
+            if (!createStagingDirectory("", staging)) staging = out;
+            std::string localCab = staging + "\\src.cab";
+            std::error_code ec; fs::copy_file(in, localCab, fs::copy_options::overwrite_existing, ec);
+            if (!ec) in = localCab; else appendToErrorLog("UNC copy failed: " + ec.message());
         }
-        DWORD waitResult = WaitForSingleObject(pi.hProcess, 120000);
-        DWORD exitCode = 1;
-        if (waitResult == WAIT_OBJECT_0) {
-            GetExitCodeProcess(pi.hProcess, &exitCode);
-        } else {
-            TerminateProcess(pi.hProcess, 1);
-            appendToErrorLog("expand.exe timed out for CAB extraction");
+
+        std::wstring expand = getSystemToolPath(L"expand.exe");
+        std::wstring cmd = L"\"" + expand + L"\" \"" + std::wstring(in.begin(), in.end()) + L"\" -F:* \"" + std::wstring(out.begin(), out.end()) + L"\"";
+        if (verbose) appendToErrorLog("expand.exe cmd: " + std::string(cmd.begin(), cmd.end()));
+        std::string outText; DWORD code = 1;
+        if (RunProcessCapture(cmd, 120000, outText, code)) {
+            appendToErrorLog("expand.exe output: " + outText);
+            if (logFilePath) RotateLogIfNeeded(*logFilePath);
+            return code == 0;
         }
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        return exitCode == 0;
+        appendToErrorLog("Failed to start expand.exe");
+        return false;
     } catch (const std::exception& ex) {
         appendToErrorLog("Exception in extractCabForAnalysis: " + std::string(ex.what()));
         return false;
@@ -963,70 +1017,152 @@ bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::st
 bool CbsManager::extractMsuForAnalysis(const std::string& msuPath, const std::string& destination) {
     try {
         appendToErrorLog("Extracting MSU using CAB-compatible methods (MSU is a CAB container)");
-        
-        // Method 1: expand.exe (native, reliable, CAB-aware)
-        {
-            std::string command = "expand.exe \"" + msuPath + "\" -F:* \"" + destination + "\"";
-            
-            STARTUPINFOW si = {};
-            PROCESS_INFORMATION pi = {};
-            si.cb = sizeof(si);
-            
-            // Convert to wide strings for Unicode safety
-            std::wstring wCommand(command.begin(), command.end());
-            
-            if (CreateProcessW(NULL, const_cast<wchar_t*>(wCommand.c_str()), NULL, NULL, FALSE, 
-                              CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-                
-                DWORD waitResult = WaitForSingleObject(pi.hProcess, 180000); // 3 minute timeout
-                DWORD exitCode = 1;
-                
-                if (waitResult == WAIT_OBJECT_0) {
-                    GetExitCodeProcess(pi.hProcess, &exitCode);
-                } else {
-                    TerminateProcess(pi.hProcess, 1);
-                    appendToErrorLog("expand.exe timed out extracting MSU");
-                }
-                
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                
-                if (exitCode == 0) {
-                    appendToErrorLog("MSU extraction succeeded via expand.exe (CAB method)");
-                    return true;
-                }
+        auto in = toAbsolutePath(msuPath);
+        auto out = toAbsolutePath(destination);
+
+        if (!fs::exists(in)) { appendToErrorLog("ERROR: MSU file not found: " + in); return false; }
+        if (!fs::exists(out)) { std::error_code ec; fs::create_directories(out, ec); if (ec) { appendToErrorLog("ERROR: Could not create destination: " + out + " (" + ec.message() + ")"); return false; } }
+
+        // If UNC, copy to local staging to avoid tool limitations
+        if (isUncPath(in)) {
+            std::string staging;
+            if (!createStagingDirectory("", staging)) staging = out;
+            std::string localMsu = staging + "\\src.msu";
+            std::error_code ec; fs::copy_file(in, localMsu, fs::copy_options::overwrite_existing, ec);
+            if (!ec) {
+                appendToErrorLog("UNC path detected; copied to local staging: " + localMsu);
+                in = localMsu;
             } else {
-                appendToErrorLog("Failed to start expand.exe for MSU extraction");
+                appendToErrorLog("UNC copy failed: " + ec.message());
             }
         }
-        
-        // Method 2: DISM /Extract as fallback (keeps existing functionality)
-        appendToErrorLog("expand.exe failed, trying DISM /Extract as fallback...");
+
+        // expand.exe first
         {
-            std::string dismCommand = "dism.exe /Online /Add-Package /PackagePath:\"" + msuPath + "\" /Extract:\"" + destination + "\"";
-            
-            STARTUPINFOW si = {};
-            PROCESS_INFORMATION pi = {};
-            si.cb = sizeof(si);
-            
-            std::wstring wDismCommand(dismCommand.begin(), dismCommand.end());
-            
-            if (CreateProcessW(NULL, const_cast<wchar_t*>(wDismCommand.c_str()), NULL, NULL, FALSE, 
-                              CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-                
-                DWORD waitResult = WaitForSingleObject(pi.hProcess, 180000); // 3 minute timeout
-                DWORD exitCode = 1;
-                
-                if (waitResult == WAIT_OBJECT_0) {
-                    GetExitCodeProcess(pi.hProcess, &exitCode);
-                } else {
-                    TerminateProcess(pi.hProcess, 1);
+            std::wstring expand = getSystemToolPath(L"expand.exe");
+            std::wstring wIn(in.begin(), in.end());
+            std::wstring wOut(out.begin(), out.end());
+            wIn = ToLongPath(wIn);
+            wOut = ToLongPath(wOut);
+            std::wstring wCommand = L"\"" + expand + L"\" \"" + wIn + L"\" -F:* \"" + wOut + L"\"";
+            if (verbose) appendToErrorLog("expand.exe cmd: " + std::string(wCommand.begin(), wCommand.end()));
+            std::string outText; DWORD code = 1;
+            if (RunProcessCapture(wCommand, 180000, outText, code)) {
+                appendToErrorLog("expand.exe output: " + outText);
+                if (logFilePath) RotateLogIfNeeded(*logFilePath);
+                if (code == 0) return true;
+                if (outText.find("Can't open input file") != std::string::npos) {
+                    appendToErrorLog("HINT: Verify the path exists and permissions. Resolved path: " + in);
+                }
+            }
+        }
+
+        // Offline DISM /Extract if offline image path supplied
+        if (!offlineImagePath.empty()) {
+            appendToErrorLog("expand.exe failed; trying DISM /Extract with offline image...");
+            std::wstring dism = getSystemToolPath(L"dism.exe");
+            std::wstring wIn(in.begin(), in.end());
+            std::wstring wOut(out.begin(), out.end());
+            std::wstring wImage(offlineImagePath.begin(), offlineImagePath.end());
+            wIn = ToLongPath(wIn); wOut = ToLongPath(wOut); wImage = ToLongPath(wImage);
+            std::wstring wDism = L"\"" + dism + L"\" /Image:\"" + wImage + L"\" /Add-Package /PackagePath:\"" + wIn + L"\" /Extract:\"" + wOut + L"\"";
+            if (verbose) appendToErrorLog("dism.exe cmd: " + std::string(wDism.begin(), wDism.end()));
+            std::string outText; DWORD code = 1;
+            if (RunProcessCapture(wDism, 300000, outText, code)) {
+                appendToErrorLog("dism.exe output: " + outText);
+                if (logFilePath) RotateLogIfNeeded(*logFilePath);
+                if (code == 0) return true;
+            }
+        }
+
+        // WUSA fallback last
+        if (allowWusaFallback) {
+            appendToErrorLog("Trying WUSA /extract as fallback...");
+            std::wstring wusa = getSystemToolPath(L"wusa.exe");
+            std::wstring wIn(in.begin(), in.end());
+            std::wstring wOut(out.begin(), out.end());
+            wIn = ToLongPath(wIn); wOut = ToLongPath(wOut);
+            std::wstring wWusa = L"\"" + wusa + L"\" \"" + wIn + L"\" /extract:\"" + wOut + L"\" /quiet /norestart";
+            if (verbose) appendToErrorLog("wusa.exe cmd: " + std::string(wWusa.begin(), wWusa.end()));
+            std::string outText; DWORD code = 1;
+            if (RunProcessCapture(wWusa, 300000, outText, code)) {
+                appendToErrorLog("wusa.exe output: " + outText);
+                if (logFilePath) RotateLogIfNeeded(*logFilePath);
+                if (code == 0) return true;
+            }
+        }
+
+        appendToErrorLog("All MSU extraction methods failed");
+        return false;
+
+    } catch (const std::exception& ex) {
+        appendToErrorLog("Exception in extractMsuForAnalysis: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+bool CbsManager::extractGenericPackageForAnalysis(const std::string& packagePath, const std::string& destination) {
+    try {
+        if (!allowPowershellFallback && !allow7zFallback) {
+            appendToErrorLog("Generic extraction disabled by configuration");
+            return false;
+        }
+
+        if (allowPowershellFallback) {
+            std::string psScript =
+                "$ErrorActionPreference = 'Stop'; "
+                "Add-Type -AssemblyName System.IO.Compression.FileSystem; "
+                "try { "
+                "  [System.IO.Compression.ZipFile]::ExtractToDirectory('" + packagePath + "', '" + destination + "'); "
+                "  exit 0; "
+                "} catch { Write-Output $_.Exception.Message; exit 1; }";
+            std::string psCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"" + psScript + "\"";
+            if (verbose) appendToErrorLog(std::string("powershell.exe cmd: ") + psCommand);
+            std::wstring wPs(psCommand.begin(), psCommand.end());
+            std::string out; DWORD code = 1;
+            if (RunProcessCapture(wPs, 60000, out, code)) {
+                appendToErrorLog("PowerShell output: " + out);
+                if (logFilePath) RotateLogIfNeeded(*logFilePath);
+                if (code == 0) return true;
+            }
+        }
+
+        if (allow7zFallback) {
+            std::string sevenZipCommand = "7z.exe x \"" + packagePath + "\" -o\"" + destination + "\" -y";
+            if (verbose) appendToErrorLog(std::string("7z.exe cmd: ") + sevenZipCommand);
+            std::wstring w7z(sevenZipCommand.begin(), sevenZipCommand.end());
+            std::string out; DWORD code = 1;
+            if (RunProcessCapture(w7z, 60000, out, code)) {
+                appendToErrorLog("7z output: " + out);
+                if (logFilePath) RotateLogIfNeeded(*logFilePath);
+                if (code == 0) return true;
+            }
+        }
+
+        return false;
+
+    } catch (const std::exception& ex) {
+        appendToErrorLog("Exception in extractGenericPackageForAnalysis: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+bool CbsManager::installExtractedFiles(const std::string& extractedDir, const std::string& targetPath, bool isOnline) {
+    try {
+        appendToErrorLog("Installing files from extracted directory: " + extractedDir);
+        
+        if (!fs::exists(extractedDir)) {
+            appendToErrorLog("Extracted directory does not exist: " + extractedDir);
             return false;
         }
         
         // Get all files from extracted directory
         std::vector<std::string> extractedFiles;
         for (const auto& entry : fs::recursive_directory_iterator(extractedDir)) {
+            if (entry.is_symlink() || entry.is_directory() && (entry.symlink_status().type() == fs::file_type::symlink)) {
+                appendToErrorLog("Skipping symlink/reparse point: " + entry.path().string());
+                continue;
+            }
             if (entry.is_regular_file()) {
                 extractedFiles.push_back(entry.path().string());
             }
