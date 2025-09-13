@@ -248,10 +248,7 @@ public:
     // Simplified WIM operations using DISM as fallback (no wimgapi.h dependency)
     bool listWimImages(const std::string& wimPath, std::vector<WimImageInfo>& images) {
         try {
-            // Use DISM to get WIM information
-            std::string command = "dism.exe /Get-WimInfo /WimFile:\"" + wimPath + "\"";
-            
-            // For now, create a simple mock response using CabHandler's WimImageInfo structure
+            // Use DISM to get WIM information (placeholder)
             images.clear();
             WimImageInfo info;
             info.imageIndex = 1;
@@ -265,7 +262,6 @@ public:
             info.bootable = true;
             info.totalBytes = 4000000000; // 4GB estimate
             images.push_back(info);
-            
             return true;
             
         } catch (const std::exception& ex) {
@@ -276,14 +272,8 @@ public:
     
     bool extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination) {
         try {
-            // Use DISM to extract WIM image
-            std::string command = "dism.exe /Apply-Image /ImageFile:\"" + wimPath + 
-                                "\" /Index:" + std::to_string(imageIndex) + 
-                                " /ApplyDir:\"" + destination + "\"";
-            
-            // For now, just create the destination directory
+            // Use DISM to extract WIM image (placeholder)
             fs::create_directories(destination);
-            
             return true;
             
         } catch (const std::exception& ex) {
@@ -295,18 +285,11 @@ public:
     bool captureWimImage(const std::string& sourcePath, const std::string& wimPath, 
                         const std::string& imageName, const std::string& description) {
         try {
-            // Use DISM to capture WIM image
-            std::string command = "dism.exe /Capture-Image /ImageFile:\"" + wimPath + 
-                                "\" /CaptureDir:\"" + sourcePath + 
-                                "\" /Name:\"" + imageName + 
-                                "\" /Description:\"" + description + "\"";
-            
-            // For now, just verify source exists
+            // Use DISM to capture WIM image (placeholder)
             if (!fs::exists(sourcePath)) {
                 lastError = "Source path does not exist: " + sourcePath;
                 return false;
             }
-            
             return true;
             
         } catch (const std::exception& ex) {
