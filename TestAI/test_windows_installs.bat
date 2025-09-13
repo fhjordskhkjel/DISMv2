@@ -22,7 +22,7 @@ REM Set test variables
 set "TEST_CAB=C:\ce33cb32f8d19fe2041448abbc1737fd\DesktopDeployment.cab"
 set "TEST_DIR=%TEMP%\WindowsInstallTest_%RANDOM%"
 set "LOG_FILE=%TEMP%\windows_install_test.log"
-set "EXE_PATH=.\x64\Release\TestAI.exe"
+set "EXE_PATH=.\x64\Release\CabHandlerAkaDISMv2.exe"
 
 echo Test Configuration:
 echo   CAB File: %TEST_CAB%

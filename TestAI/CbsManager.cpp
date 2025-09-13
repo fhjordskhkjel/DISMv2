@@ -142,7 +142,7 @@ std::optional<CbsPackageInfo> CbsManager::analyzePackage(const std::string& pack
         
         // Create temporary extraction directory
         std::string tempDir;
-        if (!createStagingDirectory(fs::temp_directory_path().string(), tempDir)) {
+        if (!createStagingDirectory("", tempDir)) {  // Use empty string to trigger fallback logic
             setLastError("Failed to create temporary staging directory for package analysis");
             return std::nullopt;
         }
@@ -333,7 +333,7 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
         
         // 2. Create temporary extraction directory for real package analysis
         std::string tempDir;
-        if (!createStagingDirectory(fs::temp_directory_path().string(), tempDir)) {
+        if (!createStagingDirectory("", tempDir)) {  // Use empty string to trigger fallback logic
             result.errorDescription = "Failed to create staging directory for package extraction";
             result.errorCode = E_FAIL;
             appendToErrorLog("CBS installation failed: " + result.errorDescription);
@@ -865,31 +865,82 @@ bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::st
 
 bool CbsManager::extractMsuForAnalysis(const std::string& msuPath, const std::string& destination) {
     try {
-        // Use wusa.exe for MSU extraction
-        std::string command = "wusa.exe \"" + msuPath + "\" /extract:\"" + destination + "\"";
+        appendToErrorLog("Extracting MSU using CAB-compatible methods (MSU is a CAB container)");
         
-        STARTUPINFOA si = {};
-        PROCESS_INFORMATION pi = {};
-        si.cb = sizeof(si);
-        
-        if (!CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, FALSE, 
-                           CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-            return false;
+        // Method 1: expand.exe (native, reliable, CAB-aware)
+        {
+            std::string command = "expand.exe \"" + msuPath + "\" -F:* \"" + destination + "\"";
+            
+            STARTUPINFOW si = {};
+            PROCESS_INFORMATION pi = {};
+            si.cb = sizeof(si);
+            
+            // Convert to wide strings for Unicode safety
+            std::wstring wCommand(command.begin(), command.end());
+            
+            if (CreateProcessW(NULL, const_cast<wchar_t*>(wCommand.c_str()), NULL, NULL, FALSE, 
+                              CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                
+                DWORD waitResult = WaitForSingleObject(pi.hProcess, 180000); // 3 minute timeout
+                DWORD exitCode = 1;
+                
+                if (waitResult == WAIT_OBJECT_0) {
+                    GetExitCodeProcess(pi.hProcess, &exitCode);
+                } else {
+                    TerminateProcess(pi.hProcess, 1);
+                    appendToErrorLog("expand.exe timed out extracting MSU");
+                }
+                
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                
+                if (exitCode == 0) {
+                    appendToErrorLog("MSU extraction succeeded via expand.exe (CAB method)");
+                    return true;
+                }
+            } else {
+                appendToErrorLog("Failed to start expand.exe for MSU extraction");
+            }
         }
         
-        DWORD waitResult = WaitForSingleObject(pi.hProcess, 120000); // 2 minute timeout
-        DWORD exitCode = 1;
-        
-        if (waitResult == WAIT_OBJECT_0) {
-            GetExitCodeProcess(pi.hProcess, &exitCode);
-        } else {
-            TerminateProcess(pi.hProcess, 1);
+        // Method 2: DISM /Extract as fallback (keeps existing functionality)
+        appendToErrorLog("expand.exe failed, trying DISM /Extract as fallback...");
+        {
+            std::string dismCommand = "dism.exe /Online /Add-Package /PackagePath:\"" + msuPath + "\" /Extract:\"" + destination + "\"";
+            
+            STARTUPINFOW si = {};
+            PROCESS_INFORMATION pi = {};
+            si.cb = sizeof(si);
+            
+            std::wstring wDismCommand(dismCommand.begin(), dismCommand.end());
+            
+            if (CreateProcessW(NULL, const_cast<wchar_t*>(wDismCommand.c_str()), NULL, NULL, FALSE, 
+                              CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                
+                DWORD waitResult = WaitForSingleObject(pi.hProcess, 180000); // 3 minute timeout
+                DWORD exitCode = 1;
+                
+                if (waitResult == WAIT_OBJECT_0) {
+                    GetExitCodeProcess(pi.hProcess, &exitCode);
+                } else {
+                    TerminateProcess(pi.hProcess, 1);
+                    appendToErrorLog("DISM MSU extraction timed out");
+                }
+                
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                
+                if (exitCode == 0) {
+                    appendToErrorLog("MSU extraction succeeded via DISM /Extract");
+                    return true;
+                }
+            } else {
+                appendToErrorLog("Failed to start DISM for MSU extraction");
+            }
         }
         
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        
-        return exitCode == 0;
+        appendToErrorLog("All MSU extraction methods failed");
+        return false;
         
     } catch (const std::exception& ex) {
         appendToErrorLog("Exception in extractMsuForAnalysis: " + std::string(ex.what()));
@@ -1147,16 +1198,81 @@ bool CbsManager::parseMumManifest(const std::string& mumPath, CbsComponentInfo& 
 
 bool CbsManager::createStagingDirectory(const std::string& basePath, std::string& stagingPath) {
     try {
-        // Ensure the base path exists and is accessible
-        if (!fs::exists(basePath)) {
-            setLastError("Base path does not exist: " + basePath);
+        std::string tempBasePath;
+        
+        // Method 0: Explicit override via environment variable (deterministic builds, CI, lockdown)
+        {
+            char buf[MAX_PATH] = {};
+            DWORD n = GetEnvironmentVariableA("DISMV2_TEMP", buf, static_cast<DWORD>(std::size(buf)));
+            if (n > 0 && n < std::size(buf)) {
+                std::string envPath(buf);
+                if (fs::exists(envPath) && fs::is_directory(envPath)) {
+                    tempBasePath = envPath;
+                    appendToErrorLog("Using DISMV2_TEMP override: " + tempBasePath);
+                } else {
+                    appendToErrorLog("DISMV2_TEMP set but not accessible, ignoring: " + envPath);
+                }
+            }
+        }
+        
+        // Method 1: Try to use provided base path if valid and no override
+        if (tempBasePath.empty()) {
+            if (!basePath.empty() && fs::exists(basePath) && fs::is_directory(basePath)) {
+                tempBasePath = basePath;
+                appendToErrorLog("Using provided base path: " + tempBasePath);
+            }
+        }
+        
+        // Method 2: Try system temp directory with validation
+        if (tempBasePath.empty()) {
+            try {
+                std::error_code ec;
+                auto sysTempPath = fs::temp_directory_path(ec);
+                if (!ec && fs::exists(sysTempPath) && fs::is_directory(sysTempPath)) {
+                    tempBasePath = sysTempPath.string();
+                    appendToErrorLog("Using system temp directory: " + tempBasePath);
+                } else {
+                    appendToErrorLog("System temp directory not accessible, trying alternatives");
+                }
+            } catch (...) {
+                appendToErrorLog("Exception getting system temp directory, trying alternatives");
+            }
+        }
+        
+        // Method 3: Fallback to known Windows temp locations
+        if (tempBasePath.empty()) {
+            std::vector<std::string> fallbackPaths = {
+                "C:\\Temp",
+                "C:\\Windows\\Temp", 
+                "C:\\Users\\Public\\temp",
+                "."
+            };
+            
+            for (const auto& path : fallbackPaths) {
+                if (fs::exists(path) && fs::is_directory(path)) {
+                    tempBasePath = path;
+                    appendToErrorLog("Using fallback temp directory: " + tempBasePath);
+                    break;
+                }
+            }
+        }
+        
+        // Method 4: Final fallback to current directory
+        if (tempBasePath.empty()) {
+            tempBasePath = fs::current_path().string();
+            appendToErrorLog("Using current directory as temp base: " + tempBasePath);
+        }
+        
+        // Validate base path exists
+        if (!fs::exists(tempBasePath)) {
+            setLastError("No accessible temp directory found");
             return false;
         }
         
         auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         
-        stagingPath = basePath + "\\cbs_staging_" + std::to_string(timestamp);
+        stagingPath = tempBasePath + "\\cbs_staging_" + std::to_string(timestamp);
         
         // Create the directory with proper error handling
         std::error_code ec;

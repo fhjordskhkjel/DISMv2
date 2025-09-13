@@ -30,10 +30,19 @@
     <ClCompile Include="PsfWimHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="build_test.cpp">
+    <ClCompile Include="EnterpriseSecurityManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="build_test_cbs.cpp">
+    <ClCompile Include="PackageSupersedenceManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="PackageSupersedenceManagerSimple.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AdvancedCertificateValidator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="WrpManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -45,6 +54,24 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="CbsIntegratedHandler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="EnterpriseSecurityManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PackageSupersedenceManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PackageSupersedenceManagerSimple.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AdvancedCertificateValidator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="WrpManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PsfWimHandler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -88,5 +115,75 @@
       <Filter>Source Files</Filter>
     </None>
     <None Include="WINDOWS_INSTALL_ENHANCEMENT_COMPLETE.md" />
+    <None Include="WUSA_DEPRECATION_FIX.md" />
+    <None Include="test_wusa_fix.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="ADVANCED_ENHANCEMENTS_PHASE2.md" />
+    <None Include="test_enterprise_features.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="ENTERPRISE_SECURITY_COMPLETE.md" />
+    <None Include="test_enterprise_security_integration.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="test_package_supersedence.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="PACKAGE_SUPERSEDENCE_IMPLEMENTATION.md" />
+    <None Include="demo_phase2_enhancements.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="PHASE2_IMPLEMENTATION_GUIDE.md" />
+    <None Include="PHASE2_COMPLETE_SUMMARY.md" />
+    <None Include="demo_phase2a_security.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="test_phase2a_implementation.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="demo_phase2_complete.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="PHASE2A_IMPLEMENTATION_SUCCESS.md" />
+    <None Include="demo_add_package_enhanced.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="ADD_PACKAGE_ENHANCED_DOCUMENTATION.md" />
+    <None Include="demo_simplified_package_intelligence.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="PHASE2_FINAL_SUCCESS_REPORT.md" />
+    <None Include="demo_add_package_enhanced_complete.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="CBS_INTEGRATION_COMPLETE_SUCCESS.md" />
+    <None Include="demo_clean_output.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="OUTPUT_FORMATTING_IMPROVEMENTS_COMPLETE.md" />
+    <None Include="final_unicode_cleanup_test.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="UNICODE_CLEANUP_FINAL_SUCCESS.md" />
+    <None Include="test_fix_packagepath_parameter.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="test_parameter_parsing_fix.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="PARAMETER_PARSING_FIX_COMPLETE.md" />
+    <None Include="final_complete_test.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="FINAL_COMPLETION_SUCCESS.md" />
+    <None Include="comprehensive_validation_test.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="SYSTEM_HEALTH_CHECK_COMPLETE.md" />
+    <None Include="FINAL_VERIFICATION_COMPLETE.md" />
+    <None Include="test_enhanced_features.bat">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

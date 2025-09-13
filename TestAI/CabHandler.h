@@ -140,6 +140,9 @@ public:
     bool extractPackageAdvanced(const std::string& packagePath, const std::string& destination, bool quiet = false);
     bool detectPackageType(const std::string& packagePath, std::string& detectedType);
     
+    // ?? Enhanced Command Integration
+    void printUniversalPackageInfo();
+    
     // Advanced extraction methods
     bool extractMsuWithWusa(const std::string& msuPath, const std::string& destination);
     bool extractMsuDirect(const std::string& msuPath, const std::string& destination);
@@ -239,8 +242,11 @@ private:
     
     // Helper functions with std::filesystem
     bool createDirectoryRecursive(const std::filesystem::path& path);
+    bool createDirectoryRecursive(const std::string& path);
     bool removeDirectoryRecursive(const std::filesystem::path& path);
+    bool removeDirectoryRecursive(const std::string& path);
     bool copyDirectoryRecursive(const std::filesystem::path& source, const std::filesystem::path& destination);
+    bool copyDirectoryRecursive(const std::string& source, const std::string& destination);
     
     std::filesystem::path getDirectoryFromPath(const std::filesystem::path& path);
     std::string getFilenameFromPath(const std::filesystem::path& path);

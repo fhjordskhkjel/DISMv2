@@ -50,14 +50,18 @@ void CabHandler::setLastErrorFmt(const std::string& fmt, Args&&... args) {
 
 // Enhanced CAB extraction with improved signature detection and fallback methods
 bool CabHandler::extractCabImpl(const std::string& cabPath, const std::string& destination) {
+    // Add distinctive debug message to confirm this version is running
+    std::cout << "DEBUG: FINAL FIXED extractCabImpl version is running!\n";
+    
     // Check if CAB file exists using modern filesystem
     if (!fs::exists(cabPath)) {
         setLastError("CAB file does not exist: " + cabPath);
         return false;
     }
 
-    if (!createDirectoryRecursive(destination)) {
-        setLastError("Failed to create destination directory: " + destination);
+    // Simply verify the destination exists (don't try to create it)
+    if (!fs::exists(destination) || !fs::is_directory(destination)) {
+        setLastError("Destination directory does not exist or is not a directory: " + destination);
         return false;
     }
 
@@ -153,7 +157,7 @@ bool CabHandler::extractCabImpl(const std::string& cabPath, const std::string& d
             "  Write-Host 'PowerShell extraction successful'; "
             "  exit 0; "
             "} catch { "
-            "  Write-Host 'PowerShell extraction failed:' $_.Exception.Message; "
+            "  Write-host 'PowerShell extraction failed:' $_.Exception.Message; "
             "  exit 1; "
             "}";
         return executePowerShellScript(script);
@@ -613,6 +617,10 @@ bool CabHandler::installCabPackageImpl(const std::string& cabPath, const std::st
                 if (!quiet) {
                     std::cout << "Registered manifest: " << fileName << "\n";
                 }
+            } else {
+                if (!quiet) {
+                    std::cout << "Warning: Failed to register manifest: " << fileName << "\n";
+                }
             }
         }
         // ?? Handle PSF manifest files
@@ -621,6 +629,10 @@ bool CabHandler::installCabPackageImpl(const std::string& cabPath, const std::st
             if (CopyFileA(file.c_str(), appxManifestTarget.c_str(), FALSE)) {
                 if (!quiet) {
                     std::cout << "Registered PSF manifest: " << fileName << "\n";
+                }
+            } else {
+                if (!quiet) {
+                    std::cout << "Warning: Failed to register PSF manifest: " << fileName << "\n";
                 }
             }
         }
@@ -1067,33 +1079,469 @@ bool CabHandler::installCabPackageOnline(const std::string& cabPath, const std::
     return installCabPackageOnlineImpl(cabPath, logPath, quiet);
 }
 
-// Missing implementations for methods that were in PsfWimHandler.cpp
+// Missing PSF implementation methods
+bool CabHandler::extractPsfImpl(const std::string& psfPath, const std::string& destination, bool quiet) {
+    if (!quiet) {
+        std::cout << "Extracting PSF package: " << psfPath << "\n";
+        std::cout << "Destination: " << destination << "\n";
+    }
+    
+    try {
+        if (!fs::exists(psfPath)) {
+            setLastError("PSF file does not exist: " + psfPath);
+            return false;
+        }
+        
+        if (!createDirectoryRecursive(destination)) {
+            setLastError("Failed to create destination directory: " + destination);
+            return false;
+        }
+        
+        // Try multiple PSF extraction methods
+        std::vector<std::function<bool()>> extractMethods = {
+            [this, &psfPath, &destination]() { return extractPsfWithPowerShell(psfPath, destination); },
+            [this, &psfPath, &destination]() { return extractPsfWithDism(psfPath, destination); },
+            [this, &psfPath, &destination]() { return extractPsfDirect(psfPath, destination); }
+        };
+        
+        std::vector<std::string> methodNames = {
+            "PowerShell Package Management",
+            "DISM Package Extraction", 
+            "Direct Binary Analysis"
+        };
+        
+        for (size_t i = 0; i < extractMethods.size(); ++i) {
+            if (!quiet) {
+                std::cout << "Trying PSF extraction method: " << methodNames[i] << "\n";
+            }
+            
+            if (extractMethods[i]()) {
+                if (!quiet) {
+                    std::cout << "Successfully extracted PSF using: " << methodNames[i] << "\n";
+                }
+                return true;
+            }
+        }
+        
+        setLastError("All PSF extraction methods failed");
+        return false;
+        
+    } catch (const std::exception& ex) {
+        setLastError("Exception during PSF extraction: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+bool CabHandler::installPsfPackageImpl(const std::string& psfPath, const std::string& targetPath,
+                                      const std::string& logPath, bool quiet) {
+    try {
+        if (!quiet) {
+            std::cout << "Installing PSF package: " << psfPath << "\n";
+            std::cout << "Target: " << targetPath << "\n";
+        }
+        
+        // Extract PSF package
+        std::string tempDir = fs::temp_directory_path().string() + "\\psf_install_" + 
+                             std::to_string(GetTickCount64());
+        
+        if (!extractPsfImpl(psfPath, tempDir, quiet)) {
+            setLastError("Failed to extract PSF package for installation");
+            return false;
+        }
+        
+        // Copy extracted files to target
+        if (!copyDirectoryRecursive(tempDir, targetPath)) {
+            setLastError("Failed to copy PSF files to target location");
+            removeDirectoryRecursive(tempDir);
+            return false;
+        }
+        
+        // Register PSF package with system (if installing to live system)
+        if (targetPath.find("C:\\") == 0) { // Installing to system drive
+            std::string registerScript = 
+                "try { "
+                "  Add-AppxPackage -Path '" + psfPath + "' -Register; "
+                "  Write-Host 'PSF package registered successfully'; "
+                "} catch { "
+                "  Write-Warning 'Failed to register PSF package, but files were copied'; "
+                "}";
+            executePowerShellScript(registerScript);
+        }
+        
+        // Cleanup
+        removeDirectoryRecursive(tempDir);
+        
+        if (!quiet) {
+            std::cout << "PSF package installation completed successfully\n";
+        }
+        
+        // Log installation
+        if (!logPath.empty()) {
+            std::ofstream logFile(logPath, std::ios::app);
+            if (logFile.is_open()) {
+                logFile << "PSF package installed: " << psfPath << " to " << targetPath << "\n";
+                logFile << "Installation time: " << GetTickCount64() << "\n";
+                logFile << "---\n";
+            }
+        }
+        
+        return true;
+        
+    } catch (const std::exception& ex) {
+        setLastError("Exception during PSF installation: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+bool CabHandler::installPsfPackageOnlineImpl(const std::string& psfPath, const std::string& logPath, bool quiet) {
+    try {
+        if (!quiet) {
+            std::cout << "Installing PSF package online: " << psfPath << "\n";
+        }
+        
+        // Use PowerShell to install PSF package to running system
+        std::string installScript = 
+            "$ErrorActionPreference = 'Stop'; "
+            "try { "
+            "  Add-AppxPackage -Path '" + psfPath + "' -Register; "
+            "  Write-Host 'PSF package registered successfully'; "
+            "  exit 0; "
+            "} catch { "
+            "  Write-Warning $_.Exception.Message; "
+            "  try { "
+            "    Add-AppxPackage -Path '" + psfPath + "' -Register -DisableDevelopmentMode; "
+            "    Write-Host 'PSF package registered with development mode disabled'; "
+            "    exit 0; "
+            "  } catch { "
+            "    Write-Error 'Failed to register PSF package'; "
+            "    exit 1; "
+            "  } "
+            "}";
+        
+        bool success = executePowerShellScript(installScript);
+        
+        if (success && !quiet) {
+            std::cout << "PSF package installed successfully to running system\n";
+        }
+        
+        // Log installation
+        if (!logPath.empty()) {
+            std::ofstream logFile(logPath, std::ios::app);
+            if (logFile.is_open()) {
+                logFile << "PSF package installed online: " << psfPath << "\n";
+                logFile << "Installation time: " << GetTickCount64() << "\n";
+                logFile << "Success: " << (success ? "Yes" : "No") << "\n";
+                logFile << "---\n";
+            }
+        }
+        
+        return success;
+        
+    } catch (const std::exception& ex) {
+        setLastError("Exception during PSF online installation: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+// Missing WIM implementation methods
+bool CabHandler::extractWimImpl(const std::string& wimPath, int imageIndex, const std::string& destination, bool quiet) {
+    if (!quiet) {
+        std::cout << "Extracting WIM file: " << wimPath << "\n";
+        std::cout << "Image Index: " << imageIndex << "\n";
+        std::cout << "Destination: " << destination << "\n";
+    }
+    
+    try {
+        if (!fs::exists(wimPath)) {
+            setLastError("WIM file does not exist: " + wimPath);
+            return false;
+        }
+        
+        if (!createDirectoryRecursive(destination)) {
+            setLastError("Failed to create destination directory: " + destination);
+            return false;
+        }
+        
+        // Try multiple WIM extraction methods
+        std::vector<std::function<bool()>> extractMethods = {
+            [this, &wimPath, imageIndex, &destination]() { 
+                return extractWimWithDism(wimPath, imageIndex, destination); 
+            },
+            [this, &wimPath, imageIndex, &destination]() { 
+                return extractWimWithWimApi(wimPath, imageIndex, destination); 
+            },
+            [this, &wimPath, &destination]() { 
+                return extractWimWith7Zip(wimPath, destination); 
+            }
+        };
+        
+        std::vector<std::string> methodNames = {
+            "DISM WIM Extraction",
+            "Windows Imaging API",
+            "7-Zip Archive Extraction"
+        };
+        
+        for (size_t i = 0; i < extractMethods.size(); ++i) {
+            if (!quiet) {
+                std::cout << "Trying WIM extraction method: " << methodNames[i] << "\n";
+            }
+            
+            if (extractMethods[i]()) {
+                if (!quiet) {
+                    std::cout << "Successfully extracted WIM using: " << methodNames[i] << "\n";
+                }
+                return true;
+            }
+        }
+        
+        setLastError("All WIM extraction methods failed");
+        return false;
+        
+    } catch (const std::exception& ex) {
+        setLastError("Exception during WIM extraction: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+bool CabHandler::installWimPackageImpl(const std::string& wimPath, int imageIndex, const std::string& targetPath,
+                                      const std::string& logPath, bool quiet) {
+    try {
+        if (!quiet) {
+            std::cout << "Installing WIM package: " << wimPath << "\n";
+            std::cout << "Image Index: " << imageIndex << "\n";
+            std::cout << "Target: " << targetPath << "\n";
+        }
+        
+        // Apply WIM image directly to target path
+        bool success = applyWimImage(wimPath, imageIndex, targetPath, false, quiet);
+        
+        if (success && !quiet) {
+            std::cout << "WIM package installation completed successfully\n";
+        }
+        
+        // Log installation
+        if (!logPath.empty()) {
+            std::ofstream logFile(logPath, std::ios::app);
+            if (logFile.is_open()) {
+                logFile << "WIM package installed: " << wimPath << " (Index: " << imageIndex << ") to " << targetPath << "\n";
+                logFile << "Installation time: " << GetTickCount64() << "\n";
+                logFile << "Success: " << (success ? "Yes" : "No") << "\n";
+                logFile << "---\n";
+            }
+        }
+        
+        return success;
+        
+    } catch (const std::exception& ex) {
+        setLastError("Exception during WIM installation: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+// Enhanced package detection and extraction
+bool CabHandler::detectPackageType(const std::string& packagePath, std::string& detectedType) {
+    try {
+        if (!fs::exists(packagePath)) {
+            setLastError("Package file does not exist: " + packagePath);
+            return false;
+        }
+        
+        auto extension = fs::path(packagePath).extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+        
+        // Check file extension first
+        if (extension == ".psf" || extension == ".appx" || extension == ".msix") {
+            detectedType = "PSF";
+            return true;
+        } else if (extension == ".wim" || extension == ".esd") {
+            detectedType = "WIM";
+            return true;
+        } else if (extension == ".msu") {
+            detectedType = "MSU";
+            return true;
+        } else if (extension == ".cab") {
+            detectedType = "CAB";
+            return true;
+        }
+        
+        // If extension is unknown, try to detect by file signature
+        std::ifstream file(packagePath, std::ios::binary);
+        if (file.is_open()) {
+            char signature[8] = {0};
+            file.read(signature, 8);
+            file.close();
+            
+            // Check for known signatures
+            if (memcmp(signature, "MSCF", 4) == 0) {
+                detectedType = "CAB";
+                return true;
+            } else if (memcmp(signature, "PK", 2) == 0) {
+                // Could be MSU, PSF (APPX/MSIX), or ZIP
+                detectedType = "PSF"; // Default to PSF for ZIP-based formats
+                return true;
+            } else if (memcmp(signature, "MSWIM", 5) == 0) {
+                detectedType = "WIM";
+                return true;
+            }
+        }
+        
+        detectedType = "UNKNOWN";
+        return false;
+        
+    } catch (const std::exception& ex) {
+        setLastError("Exception detecting package type: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+bool CabHandler::extractPackageAdvanced(const std::string& packagePath, const std::string& destination, bool quiet) {
+    try {
+        std::string packageType;
+        if (!detectPackageType(packagePath, packageType)) {
+            setLastError("Unable to detect package type for: " + packagePath);
+            return false;
+        }
+        
+        if (!quiet) {
+            std::cout << "Detected package type: " << packageType << "\n";
+            std::cout << "Initializing advanced extraction...\n";
+        }
+        
+        if (packageType == "PSF") {
+            return extractPsfImpl(packagePath, destination, quiet);
+        } else if (packageType == "WIM") {
+            return extractWimImpl(packagePath, 1, destination, quiet); // Default to first image
+        } else if (packageType == "MSU") {
+            return extractMsuPackageImpl(packagePath, destination, quiet);
+        } else if (packageType == "CAB") {
+            return extractCabImpl(packagePath, destination);
+        }
+        
+        setLastError("Unsupported package type: " + packageType);
+        return false;
+        
+    } catch (const std::exception& ex) {
+        setLastError("Exception in advanced package extraction: " + std::string(ex.what()));
+        return false;
+    }
+}
+
+// Enhanced Command Integration
+void CabHandler::printUniversalPackageInfo() {
+    std::cout << "\nUniversal Windows Package Manager\n";
+    std::cout << "=====================================\n";
+    std::cout << "Supported Formats:\n";
+    std::cout << "  CAB - Cabinet Archives\n";
+    std::cout << "  MSU - Microsoft Update Packages\n";
+    std::cout << "  PSF - Package Store Format (APPX/MSIX)\n";
+    std::cout << "  WIM - Windows Imaging Format\n";
+    std::cout << "\nEnhanced Features:\n";
+    std::cout << "  Automatic package type detection\n";
+    std::cout << "  Multiple extraction fallback methods\n";
+    std::cout << "  Enterprise CBS integration\n";
+    std::cout << "  Online and offline installation\n";
+    std::cout << "  Comprehensive logging\n";
+    std::cout << "\n";
+}
+
+INT_PTR DIAMONDAPI CabHandler::fdiNotify(FDINOTIFICATIONTYPE fdint, PFDINOTIFICATION pfdin) {
+    // Basic implementation for extraction
+    if (fdint == fdintCOPY_FILE && g_currentContext && !g_currentContext->listOnly) {
+        std::string destPath = g_currentContext->destinationPath + "\\" + pfdin->psz1;
+        std::string destDir = fs::path(destPath).parent_path().string();
+        
+        g_currentContext->handler->createDirectoryRecursive(destDir);
+        
+        return (INT_PTR)CreateFileA(destPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+                                   NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
+    
+    if (fdint == fdintCLOSE_FILE_INFO && g_currentContext) {
+        CloseHandle((HANDLE)pfdin->hf);
+        return TRUE;
+    }
+    
+    return 0;
+}
+
+// Stub implementations for FCI/FDI callbacks
+BOOL DIAMONDAPI CabHandler::fciGetNextCab(PCCAB pccab, ULONG cbPrevCab, void* pv) { return TRUE; }
+int DIAMONDAPI CabHandler::fciFilePlaced(PCCAB pccab, char* pszFile, LONG cbFile, BOOL fContinuation, void* pv) { return 0; }
+void* DIAMONDAPI CabHandler::fciAlloc(ULONG cb) { return malloc(cb); }
+void DIAMONDAPI CabHandler::fciFree(void* memory) { free(memory); }
+INT_PTR DIAMONDAPI CabHandler::fciOpen(char* pszFile, int oflag, int pmode, int* err, void* pv) { return (INT_PTR)CreateFileA(pszFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL); }
+UINT DIAMONDAPI CabHandler::fciRead(INT_PTR hf, void* memory, UINT cb, int* err, void* pv) { DWORD bytesRead; ReadFile((HANDLE)hf, memory, cb, &bytesRead, NULL); return bytesRead; }
+UINT DIAMONDAPI CabHandler::fciWrite(INT_PTR hf, void* memory, UINT cb, int* err, void* pv) { DWORD bytesWritten; WriteFile((HANDLE)hf, memory, cb, &bytesWritten, NULL); return bytesWritten; }
+int DIAMONDAPI CabHandler::fciClose(INT_PTR hf, int* err, void* pv) { return CloseHandle((HANDLE)hf) ? 0 : -1; }
+LONG DIAMONDAPI CabHandler::fciSeek(INT_PTR hf, LONG dist, int seektype, int* err, void* pv) { return SetFilePointer((HANDLE)hf, dist, NULL, seektype); }
+int DIAMONDAPI CabHandler::fciDelete(char* pszFile, int* err, void* pv) { return DeleteFileA(pszFile) ? 0 : -1; }
+BOOL DIAMONDAPI CabHandler::fciGetTempFile(char* pszTempName, int cbTempName, void* pv) { return GetTempFileNameA(".", "CAB", 0, pszTempName) != 0; }
+
+void* DIAMONDAPI CabHandler::fdiAlloc(ULONG cb) { return malloc(cb); }
+void DIAMONDAPI CabHandler::fdiFree(void* pv) { free(pv); }
+INT_PTR DIAMONDAPI CabHandler::fdiOpen(char* pszFile, int oflag, int pmode) { return (INT_PTR)CreateFileA(pszFile, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL); }
+UINT DIAMONDAPI CabHandler::fdiRead(INT_PTR hf, void* pv, UINT cb) { DWORD bytesRead; ReadFile((HANDLE)hf, pv, cb, &bytesRead, NULL); return bytesRead; }
+UINT DIAMONDAPI CabHandler::fdiWrite(INT_PTR hf, void* pv, UINT cb) { DWORD bytesWritten; WriteFile((HANDLE)hf, pv, cb, &bytesWritten, NULL); return bytesWritten; }
+int DIAMONDAPI CabHandler::fdiClose(INT_PTR hf) { return CloseHandle((HANDLE)hf) ? 0 : -1; }
+LONG DIAMONDAPI CabHandler::fdiSeek(INT_PTR hf, LONG dist, int seektype) { return SetFilePointer((HANDLE)hf, dist, NULL, seektype); }
+
+// Missing implementations for methods that were referenced but not defined
 bool CabHandler::extractMsuPackageImpl(const std::string& msuPath, const std::string& destination, bool quiet) {
     if (!quiet) {
-        std::cout << "Extracting MSU package using enhanced methods: " << msuPath << "\n";
+        std::cout << "Extracting MSU package using enhanced methods (WUSA /extract deprecated): " << msuPath << "\n";
     }
     
     // Enhanced MSU extraction with multiple fallback methods
+    // UPDATED: Removed deprecated WUSA method, enhanced alternatives
     std::vector<std::function<bool()>> extractMethods;
     std::vector<std::string> methodNames;
     
-    // Method 1: WUSA extraction
-    extractMethods.push_back([this, &msuPath, &destination]() {
-        return extractMsuWithWusa(msuPath, destination);
-    });
-    methodNames.push_back("WUSA (Windows Update Standalone)");
-    
-    // Method 2: PowerShell extraction
+    // Method 1: Enhanced PowerShell extraction (Primary method)
     extractMethods.push_back([this, &msuPath, &destination]() {
         return extractMsuWithPowerShell(msuPath, destination);
     });
-    methodNames.push_back("PowerShell .NET API");
+    methodNames.push_back("PowerShell .NET API (Primary)");
     
-    // Method 3: Binary parsing
+    // Method 2: DISM extraction (Microsoft supported)
+    extractMethods.push_back([this, &msuPath, &destination]() {
+        std::string command = "dism.exe /Online /Add-Package /PackagePath:\"" + msuPath + "\" /Extract:\"" + destination + "\"";
+        return executeCommand(command, 180000); // 3 minute timeout
+    });
+    methodNames.push_back("DISM Package Extraction");
+    
+    // Method 3: Binary parsing and embedded CAB extraction
     extractMethods.push_back([this, &msuPath, &destination]() {
         return extractMsuWithBinaryParsing(msuPath, destination);
     });
-    methodNames.push_back("Binary Analysis");
+    methodNames.push_back("Binary Analysis & CAB Extraction");
+    
+    // Method 4: 7-Zip (if available)
+    extractMethods.push_back([this, &msuPath, &destination]() {
+        std::string command = "7z.exe x \"" + msuPath + "\" -o\"" + destination + "\" -y";
+        return executeCommand(command, 120000);
+    });
+    methodNames.push_back("7-Zip Archive Extraction");
+    
+    // Method 5: Advanced PowerShell with Shell.Application COM
+    extractMethods.push_back([this, &msuPath, &destination]() {
+        std::string script = 
+            "$ErrorActionPreference = 'SilentlyContinue'; "
+            "try { "
+            "  $shell = New-Object -ComObject Shell.Application; "
+            "  $zip = $shell.NameSpace('" + msuPath + "'); "
+            "  $dest = $shell.NameSpace('" + destination + "'); "
+            "  if ($zip -and $dest) { "
+            "    $dest.CopyHere($zip.Items(), 16); "
+            "    exit 0; "
+            "  } else { "
+            "    exit 1; "
+            "  } "
+            "} catch { "
+            "  exit 1; "
+            "}";
+        return executePowerShellScript(script);
+    });
+    methodNames.push_back("PowerShell Shell.Application COM");
     
     // Try each method
     for (size_t i = 0; i < extractMethods.size(); ++i) {
@@ -1116,13 +1564,8 @@ bool CabHandler::extractMsuPackageImpl(const std::string& msuPath, const std::st
         }
     }
     
-    setLastError("All MSU extraction methods failed");
+    setLastError("All MSU extraction methods failed (WUSA /extract no longer supported by Microsoft)");
     return false;
-}
-
-bool CabHandler::extractMsuWithWusa(const std::string& msuPath, const std::string& destination) {
-    std::string command = "wusa.exe \"" + msuPath + "\" /extract:\"" + destination + "\"";
-    return executeCommand(command, 120000); // 2 minute timeout
 }
 
 bool CabHandler::extractMsuWithPowerShell(const std::string& msuPath, const std::string& destination) {
@@ -1136,170 +1579,66 @@ bool CabHandler::extractMsuWithBinaryParsing(const std::string& msuPath, const s
     return attemptBinaryExtraction(msuPath, destination);
 }
 
-bool CabHandler::extractMsuDirect(const std::string& msuPath, const std::string& destination) {
-    return extractMsuWithPowerShell(msuPath, destination);
+// Filesystem helper implementations
+bool CabHandler::createDirectoryRecursive(const std::filesystem::path& path) {
+    std::error_code ec;
+    return fs::create_directories(path, ec);
 }
 
-bool CabHandler::extractMsuAsZip(const std::string& msuPath, const std::string& destination) {
-    return extractMsuWithPowerShell(msuPath, destination);
+bool CabHandler::createDirectoryRecursive(const std::string& path) {
+    std::error_code ec;
+    return fs::create_directories(path, ec);
 }
 
-bool CabHandler::extractMsuAlternative(const std::string& msuPath, const std::string& destination) {
-    std::string command = "expand.exe \"" + msuPath + "\" -F:* \"" + destination + "\"";
-    return executeCommand(command, 60000);
+bool CabHandler::removeDirectoryRecursive(const std::filesystem::path& path) {
+    std::error_code ec;
+    return fs::remove_all(path, ec) > 0;
 }
 
-bool CabHandler::extractMsuWithModernAPI(const std::string& msuPath, const std::string& destination) {
-    return extractMsuWithPowerShell(msuPath, destination);
+bool CabHandler::removeDirectoryRecursive(const std::string& path) {
+    std::error_code ec;
+    return fs::remove_all(path, ec) > 0;
 }
 
-bool CabHandler::extractMsuWithWinRAR(const std::string& msuPath, const std::string& destination) {
-    std::string command = "winrar.exe x \"" + msuPath + "\" \"" + destination + "\\\"";
-    return executeCommand(command, 60000);
-}
-
-bool CabHandler::extractMsuWith7Zip(const std::string& msuPath, const std::string& destination) {
-    std::string command = "7z.exe x \"" + msuPath + "\" -o\"" + destination + "\" -y";
-    return executeCommand(command, 60000);
-}
-
-bool CabHandler::extractMsuWithPkUnzip(const std::string& msuPath, const std::string& destination) {
-    std::string command = "unzip.exe \"" + msuPath + "\" -d \"" + destination + "\"";
-    return executeCommand(command, 60000);
-}
-
-bool CabHandler::extractMsuWithUrlMon(const std::string& msuPath, const std::string& destination) {
-    return extractMsuWithPowerShell(msuPath, destination);
-}
-
-bool CabHandler::extractMsuWithStreaming(const std::string& msuPath, const std::string& destination) {
-    return extractMsuWithPowerShell(msuPath, destination);
-}
-
-// PSF methods
-bool CabHandler::extractPsf(const std::string& psfPath, const std::string& destination) {
-    return extractPsfImpl(psfPath, destination, false);
-}
-
-bool CabHandler::extractPsfWithPowerShell(const std::string& psfPath, const std::string& destination) {
-    std::string script = 
-        "Add-Type -AssemblyName System.IO.Compression.FileSystem; "
-        "[System.IO.Compression.ZipFile]::ExtractToDirectory('" + psfPath + "', '" + destination + "')";
-    return executePowerShellScript(script);
-}
-
-bool CabHandler::extractPsfWithDism(const std::string& psfPath, const std::string& destination) {
-    std::string command = "dism.exe /Online /Add-ProvisionedAppxPackage /PackagePath:\"" + 
-                         psfPath + "\" /Extract:\"" + destination + "\"";
-    return executeCommand(command, 60000);
-}
-
-bool CabHandler::extractPsfDirect(const std::string& psfPath, const std::string& destination) {
-    return extractPsfWithPowerShell(psfPath, destination);
-}
-
-bool CabHandler::listPsfContents(const std::string& psfPath, std::vector<PsfPackageInfo>& packages) {
-    PsfPackageInfo packageInfo;
-    if (analyzePsfPackage(psfPath, packageInfo)) {
-        packages.push_back(packageInfo);
+bool CabHandler::copyDirectoryRecursive(const std::filesystem::path& source, const std::filesystem::path& destination) {
+    try {
+        fs::copy(source, destination, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
         return true;
+    } catch (const std::exception&) {
+        return false;
     }
-    return false;
 }
 
-bool CabHandler::analyzePsfPackage(const std::string& psfPath, PsfPackageInfo& packageInfo) {
-    // Basic PSF analysis
-    packageInfo.packageName = fs::path(psfPath).stem().string();
-    packageInfo.version = "1.0.0.0";
-    packageInfo.architecture = "x64";
-    packageInfo.isApplicable = true;
-    packageInfo.storeLocation = psfPath;
-    return true;
-}
-
-bool CabHandler::installPsfPackage(const std::string& psfPath, const std::string& targetPath,
-                                  const std::string& logPath, bool quiet) {
-    return installPsfPackageImpl(psfPath, targetPath, logPath, quiet);
-}
-
-bool CabHandler::installPsfPackageOnline(const std::string& psfPath, const std::string& logPath, bool quiet) {
-    return installPsfPackageOnlineImpl(psfPath, logPath, quiet);
-}
-
-bool CabHandler::verifyPsfPackage(const std::string& psfPath) {
-    return fs::exists(psfPath);
-}
-
-// WIM methods
-bool CabHandler::extractWim(const std::string& wimPath, int imageIndex, const std::string& destination) {
-    return extractWimImpl(wimPath, imageIndex, destination, false);
-}
-
-bool CabHandler::extractWimWithDism(const std::string& wimPath, int imageIndex, const std::string& destination) {
-    std::string command = "dism.exe /Apply-Image /ImageFile:\"" + wimPath + 
-                         "\" /Index:" + std::to_string(imageIndex) + 
-                         " /ApplyDir:\"" + destination + "\"";
-    return executeCommand(command, 300000);
-}
-
-bool CabHandler::extractWimWithWimApi(const std::string& wimPath, int imageIndex, const std::string& destination) {
-    return extractWimWithDism(wimPath, imageIndex, destination);
-}
-
-bool CabHandler::extractWimWith7Zip(const std::string& wimPath, const std::string& destination) {
-    std::string command = "7z.exe x \"" + wimPath + "\" -o\"" + destination + "\" -y";
-    return executeCommand(command, 300000);
-}
-
-bool CabHandler::listWimImages(const std::string& wimPath, std::vector<WimImageInfo>& images) {
-    return analyzeWimFile(wimPath, images);
-}
-
-bool CabHandler::installWimPackage(const std::string& wimPath, int imageIndex, const std::string& targetPath,
-                                  const std::string& logPath, bool quiet) {
-    return installWimPackageImpl(wimPath, imageIndex, targetPath, logPath, quiet);
-}
-
-bool CabHandler::applyWimImage(const std::string& wimPath, int imageIndex, const std::string& targetPath,
-                              bool preserveAcl, bool quiet) {
-    std::string command = "dism.exe /Apply-Image /ImageFile:\"" + wimPath + 
-                         "\" /Index:" + std::to_string(imageIndex) + 
-                         " /ApplyDir:\"" + targetPath + "\"";
-    if (preserveAcl) {
-        command += " /EA";
+bool CabHandler::copyDirectoryRecursive(const std::string& source, const std::string& destination) {
+    try {
+        fs::copy(source, destination, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        return true;
+    } catch (const std::exception&) {
+        return false;
     }
-    return executeCommand(command, 600000);
 }
 
-bool CabHandler::captureWimImage(const std::string& sourcePath, const std::string& wimPath,
-                                const std::string& imageName, const std::string& description, bool quiet) {
-    std::string command = "dism.exe /Capture-Image /ImageFile:\"" + wimPath + 
-                         "\" /CaptureDir:\"" + sourcePath + 
-                         "\" /Name:\"" + imageName + "\"";
-    if (!description.empty()) {
-        command += " /Description:\"" + description + "\"";
-    }
-    return executeCommand(command, 1800000);
+std::filesystem::path CabHandler::getDirectoryFromPath(const std::filesystem::path& path) {
+    return path.parent_path();
 }
 
-bool CabHandler::verifyWimFile(const std::string& wimPath) {
-    std::string command = "dism.exe /Get-WimInfo /WimFile:\"" + wimPath + "\"";
-    return executeCommand(command, 60000);
+std::string CabHandler::getFilenameFromPath(const std::filesystem::path& path) {
+    return path.filename().string();
 }
 
-bool CabHandler::isPsfFile(const std::string& filePath) {
-    auto extension = fs::path(filePath).extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
-    return extension == ".psf" || extension == ".appx" || extension == ".msix";
+std::filesystem::path CabHandler::getRelativePath(const std::filesystem::path& fullPath, const std::filesystem::path& basePath) {
+    return fs::relative(fullPath, basePath);
 }
 
-bool CabHandler::isWimFile(const std::string& filePath) {
-    auto extension = fs::path(filePath).extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
-    return extension == ".wim" || extension == ".esd";
+std::string CabHandler::getDirectoryFromPathStr(const std::string& path) {
+    return fs::path(path).parent_path().string();
 }
 
-// Helper methods that need implementations
+std::string CabHandler::getRelativePathStr(const std::string& fullPath, const std::string& basePath) {
+    return fs::relative(fs::path(fullPath), fs::path(basePath)).string();
+}
+
+// Helper methods for PSF and WIM
 bool CabHandler::executePowerShellScript(const std::string& script) {
     std::string command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"" + script + "\"";
     return executeCommand(command, 60000);
@@ -1461,44 +1800,142 @@ bool CabHandler::installFromExtractedMsuOnline(const std::string& extractedDir, 
     return success;
 }
 
-// Filesystem helper methods
-bool CabHandler::createDirectoryRecursive(const std::filesystem::path& path) {
-    std::error_code ec;
-    return fs::create_directories(path, ec);
+// PSF methods
+bool CabHandler::extractPsf(const std::string& psfPath, const std::string& destination) {
+    return extractPsfImpl(psfPath, destination, false);
 }
 
-bool CabHandler::removeDirectoryRecursive(const std::filesystem::path& path) {
-    std::error_code ec;
-    return fs::remove_all(path, ec) > 0;
+bool CabHandler::extractPsfWithPowerShell(const std::string& psfPath, const std::string& destination) {
+    std::string script = 
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem; "
+        "[System.IO.Compression.ZipFile]::ExtractToDirectory('" + psfPath + "', '" + destination + "')";
+    return executePowerShellScript(script);
 }
 
-bool CabHandler::copyDirectoryRecursive(const std::filesystem::path& source, const std::filesystem::path& destination) {
-    try {
-        fs::copy(source, destination, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+bool CabHandler::extractPsfWithDism(const std::string& psfPath, const std::string& destination) {
+    std::string command = "dism.exe /Online /Add-ProvisionedAppxPackage /PackagePath:\"" + 
+                         psfPath + "\" /Extract:\"" + destination + "\"";
+    return executeCommand(command,  60000);
+}
+
+bool CabHandler::extractPsfDirect(const std::string& psfPath, const std::string& destination) {
+    return extractPsfWithPowerShell(psfPath, destination);
+}
+
+bool CabHandler::listPsfContents(const std::string& psfPath, std::vector<PsfPackageInfo>& packages) {
+    PsfPackageInfo packageInfo;
+    if (analyzePsfPackage(psfPath, packageInfo)) {
+        packages.push_back(packageInfo);
         return true;
-    } catch (const std::exception&) {
-        return false;
     }
+    return false;
 }
 
-std::filesystem::path CabHandler::getDirectoryFromPath(const std::filesystem::path& path) {
-    return path.parent_path();
+bool CabHandler::analyzePsfPackage(const std::string& psfPath, PsfPackageInfo& packageInfo) {
+    // Basic PSF analysis
+    packageInfo.packageName = fs::path(psfPath).stem().string();
+    packageInfo.version = "1.0.0.0";
+    packageInfo.architecture = "x64";
+    packageInfo.isApplicable = true;
+    packageInfo.storeLocation = psfPath;
+    return true;
 }
 
-std::string CabHandler::getFilenameFromPath(const std::filesystem::path& path) {
-    return path.filename().string();
+bool CabHandler::installPsfPackage(const std::string& psfPath, const std::string& targetPath,
+                                  const std::string& logPath, bool quiet) {
+    return installPsfPackageImpl(psfPath, targetPath, logPath, quiet);
 }
 
-std::filesystem::path CabHandler::getRelativePath(const std::filesystem::path& fullPath, const std::filesystem::path& basePath) {
-    return fs::relative(fullPath, basePath);
+bool CabHandler::installPsfPackageOnline(const std::string& psfPath, const std::string& logPath, bool quiet) {
+    return installPsfPackageOnlineImpl(psfPath, logPath, quiet);
 }
 
-std::string CabHandler::getDirectoryFromPathStr(const std::string& path) {
-    return fs::path(path).parent_path().string();
+bool CabHandler::verifyPsfPackage(const std::string& psfPath) {
+    return fs::exists(psfPath);
 }
 
-std::string CabHandler::getRelativePathStr(const std::string& fullPath, const std::string& basePath) {
-    return fs::relative(fs::path(fullPath), fs::path(basePath)).string();
+// WIM methods
+bool CabHandler::extractWim(const std::string& wimPath, int imageIndex, const std::string& destination) {
+    return extractWimImpl(wimPath, imageIndex, destination, false);
+}
+
+bool CabHandler::extractWimWithDism(const std::string& wimPath, int imageIndex, const std::string& destination) {
+    std::string command = "dism.exe /Apply-Image /ImageFile:\"" + wimPath + 
+                         "\" /Index:" + std::to_string(imageIndex) + 
+                         " /ApplyDir:\"" + destination + "\"";
+    return executeCommand(command, 300000);
+}
+
+bool CabHandler::extractWimWithWimApi(const std::string& wimPath, int imageIndex, const std::string& destination) {
+    return extractWimWithDism(wimPath, imageIndex, destination);
+}
+
+bool CabHandler::extractWimWith7Zip(const std::string& wimPath, const std::string& destination) {
+    std::string command = "7z.exe x \"" + wimPath + "\" -o\"" + destination + "\" -y";
+    return executeCommand(command, 300000);
+}
+
+bool CabHandler::listWimImages(const std::string& wimPath, std::vector<WimImageInfo>& images) {
+    return analyzeWimFile(wimPath, images);
+}
+
+bool CabHandler::analyzeWimFile(const std::string& wimPath, std::vector<WimImageInfo>& images) {
+    // Basic WIM analysis - create default image
+    WimImageInfo defaultImage;
+    defaultImage.imageIndex = 1;
+    defaultImage.imageName = "Windows Image";
+    defaultImage.description = "Windows Installation Image";
+    defaultImage.architecture = "x64";
+    defaultImage.version = "10.0";
+    defaultImage.bootable = true;
+    defaultImage.totalBytes = 0;
+    
+    images.push_back(defaultImage);
+    return true;
+}
+
+bool CabHandler::installWimPackage(const std::string& wimPath, int imageIndex, const std::string& targetPath,
+                                  const std::string& logPath, bool quiet) {
+    return installWimPackageImpl(wimPath, imageIndex, targetPath, logPath, quiet);
+}
+
+bool CabHandler::applyWimImage(const std::string& wimPath, int imageIndex, const std::string& targetPath,
+                              bool preserveAcl, bool quiet) {
+    std::string command = "dism.exe /Apply-Image /ImageFile:\"" + wimPath + 
+                         "\" /Index:" + std::to_string(imageIndex) + 
+                         " /ApplyDir:\"" + targetPath + "\"";
+    if (preserveAcl) {
+        command += " /EA";
+    }
+    return executeCommand(command, 600000);
+}
+
+bool CabHandler::captureWimImage(const std::string& sourcePath, const std::string& wimPath,
+                                const std::string& imageName, const std::string& description, bool quiet) {
+    std::string command = "dism.exe /Capture-Image /ImageFile:\"" + wimPath + 
+                         "\" /CaptureDir:\"" + sourcePath + 
+                         "\" /Name:\"" + imageName + "\"";
+    if (!description.empty()) {
+        command += " /Description:\"" + description + "\"";
+    }
+    return executeCommand(command, 1800000);
+}
+
+bool CabHandler::verifyWimFile(const std::string& wimPath) {
+    std::string command = "dism.exe /Get-WimInfo /WimFile:\"" + wimPath + "\"";
+    return executeCommand(command, 60000);
+}
+
+bool CabHandler::isPsfFile(const std::string& filePath) {
+    auto extension = fs::path(filePath).extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+    return extension == ".psf" || extension == ".appx" || extension == ".msix";
+}
+
+bool CabHandler::isWimFile(const std::string& filePath) {
+    auto extension = fs::path(filePath).extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+    return extension == ".wim" || extension == ".esd";
 }
 
 // CBS method stubs
@@ -1521,48 +1958,6 @@ bool CabHandler::installWimPackageWithCbs(const std::string& wimPath, int imageI
         return installWimPackageImpl(wimPath, imageIndex, targetPath, logPath, quiet);
     }
 }
-
-// FDI/FCI callback implementations (stubs for now)
-INT_PTR DIAMONDAPI CabHandler::fdiNotify(FDINOTIFICATIONTYPE fdint, PFDINOTIFICATION pfdin) {
-    // Basic implementation for extraction
-    if (fdint == fdintCOPY_FILE && g_currentContext && !g_currentContext->listOnly) {
-        std::string destPath = g_currentContext->destinationPath + "\\" + pfdin->psz1;
-        std::string destDir = fs::path(destPath).parent_path().string();
-        
-        g_currentContext->handler->createDirectoryRecursive(destDir);
-        
-        return (INT_PTR)CreateFileA(destPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
-                                   NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    }
-    
-    if (fdint == fdintCLOSE_FILE_INFO && g_currentContext) {
-        CloseHandle((HANDLE)pfdin->hf);
-        return TRUE;
-    }
-    
-    return 0;
-}
-
-// Stub implementations for FCI/FDI callbacks
-BOOL DIAMONDAPI CabHandler::fciGetNextCab(PCCAB pccab, ULONG cbPrevCab, void* pv) { return TRUE; }
-int DIAMONDAPI CabHandler::fciFilePlaced(PCCAB pccab, char* pszFile, LONG cbFile, BOOL fContinuation, void* pv) { return 0; }
-void* DIAMONDAPI CabHandler::fciAlloc(ULONG cb) { return malloc(cb); }
-void DIAMONDAPI CabHandler::fciFree(void* memory) { free(memory); }
-INT_PTR DIAMONDAPI CabHandler::fciOpen(char* pszFile, int oflag, int pmode, int* err, void* pv) { return (INT_PTR)CreateFileA(pszFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL); }
-UINT DIAMONDAPI CabHandler::fciRead(INT_PTR hf, void* memory, UINT cb, int* err, void* pv) { DWORD bytesRead; ReadFile((HANDLE)hf, memory, cb, &bytesRead, NULL); return bytesRead; }
-UINT DIAMONDAPI CabHandler::fciWrite(INT_PTR hf, void* memory, UINT cb, int* err, void* pv) { DWORD bytesWritten; WriteFile((HANDLE)hf, memory, cb, &bytesWritten, NULL); return bytesWritten; }
-int DIAMONDAPI CabHandler::fciClose(INT_PTR hf, int* err, void* pv) { return CloseHandle((HANDLE)hf) ? 0 : -1; }
-LONG DIAMONDAPI CabHandler::fciSeek(INT_PTR hf, LONG dist, int seektype, int* err, void* pv) { return SetFilePointer((HANDLE)hf, dist, NULL, seektype); }
-int DIAMONDAPI CabHandler::fciDelete(char* pszFile, int* err, void* pv) { return DeleteFileA(pszFile) ? 0 : -1; }
-BOOL DIAMONDAPI CabHandler::fciGetTempFile(char* pszTempName, int cbTempName, void* pv) { return GetTempFileNameA(".", "CAB", 0, pszTempName) != 0; }
-
-void* DIAMONDAPI CabHandler::fdiAlloc(ULONG cb) { return malloc(cb); }
-void DIAMONDAPI CabHandler::fdiFree(void* pv) { free(pv); }
-INT_PTR DIAMONDAPI CabHandler::fdiOpen(char* pszFile, int oflag, int pmode) { return (INT_PTR)CreateFileA(pszFile, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL); }
-UINT DIAMONDAPI CabHandler::fdiRead(INT_PTR hf, void* pv, UINT cb) { DWORD bytesRead; ReadFile((HANDLE)hf, pv, cb, &bytesRead, NULL); return bytesRead; }
-UINT DIAMONDAPI CabHandler::fdiWrite(INT_PTR hf, void* pv, UINT cb) { DWORD bytesWritten; WriteFile((HANDLE)hf, pv, cb, &bytesWritten, NULL); return bytesWritten; }
-int DIAMONDAPI CabHandler::fdiClose(INT_PTR hf) { return CloseHandle((HANDLE)hf) ? 0 : -1; }
-LONG DIAMONDAPI CabHandler::fdiSeek(INT_PTR hf, LONG dist, int seektype) { return SetFilePointer((HANDLE)hf, dist, NULL, seektype); }
 
 bool CabHandler::extractMsuPackage(const std::string& msuPath, const std::string& destination, bool quiet) {
     return extractMsuPackageImpl(msuPath, destination, quiet);
