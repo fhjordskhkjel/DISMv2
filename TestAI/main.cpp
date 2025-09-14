@@ -18,6 +18,7 @@ namespace {
     struct GlobalOptions {
         std::string tempDir;
         std::string logPath;
+        std::string timeoutMs;
         bool verbose = false;
     } g_opts;
 
@@ -56,6 +57,41 @@ namespace {
         }
     }
 
+    bool testWriteAccess(const fs::path& dir) {
+        try {
+            std::error_code ec; fs::create_directories(dir, ec);
+            fs::path tmp = dir / "__dismv2_write_test.tmp";
+            HANDLE h = CreateFileW(tmp.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+            if (h == INVALID_HANDLE_VALUE) return false;
+            CloseHandle(h);
+            return true;
+        } catch (...) { return false; }
+    }
+
+    bool testOfflineImageWrite(const std::string& imagePath, std::string& reason) {
+        try {
+            fs::path root(imagePath);
+            if (!testWriteAccess(root / "Windows" / "servicing" / "Packages")) {
+                reason = "No write access to Image\\Windows\\servicing\\Packages"; return false;
+            }
+            if (!testWriteAccess(root / "Windows" / "WinSxS")) {
+                reason = "No write access to Image\\Windows\\WinSxS"; return false;
+            }
+            return true;
+        } catch (...) { reason = "Unexpected write test error"; return false; }
+    }
+
+    // Elevation check (Admin token). Not equivalent to TrustedInstaller.
+    bool IsProcessElevated() {
+        HANDLE hToken = NULL;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) return false;
+        TOKEN_ELEVATION elev{}; DWORD cb = sizeof(elev);
+        BOOL ok = GetTokenInformation(hToken, TokenElevation, &elev, sizeof(elev), &cb);
+        CloseHandle(hToken);
+        return ok && elev.TokenIsElevated != 0;
+    }
+
     void applyGlobalOptions(CbsManager* cbs = nullptr) {
         if (!g_opts.tempDir.empty()) {
             SetEnvironmentVariableA("DISMV2_TEMP", g_opts.tempDir.c_str());
@@ -63,6 +99,9 @@ namespace {
         if (!g_opts.logPath.empty()) {
             SetEnvironmentVariableA("DISMV2_LOG", g_opts.logPath.c_str());
             if (cbs) cbs->enableCbsLogging(g_opts.logPath);
+        }
+        if (!g_opts.timeoutMs.empty()) {
+            SetEnvironmentVariableA("DISMV2_TIMEOUT_MS", g_opts.timeoutMs.c_str());
         }
     }
 
@@ -93,6 +132,8 @@ namespace {
                 } catch (const std::exception& ex) {
                     std::cerr << "Warning: Could not validate log path: " << ex.what() << "\n";
                 }
+            } else if (arg == "--timeout-ms" && i + 1 < argc) {
+                g_opts.timeoutMs = argv[++i];
             } else if (arg == "--verbose") {
                 g_opts.verbose = true;
             }
@@ -347,27 +388,23 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Validate argv array
     if (!argv || !argv[0] || !argv[1]) {
         std::cerr << "Error: Invalid command line arguments\n";
         return 1;
     }
 
-    // Parse global options (after command we parse again per-command if needed)
     int parseResult = parseGlobalOptions(argc, argv, 2);
     if (parseResult != 0) {
         return parseResult;
     }
     
     std::string command = argv[1];
-    
-    // Validate command is not empty
     if (command.empty()) {
         std::cerr << "Error: Empty command provided\n";
         printUsage();
         return 1;
     }
-    
+
     try {
         // Package Supersedence and Intelligence Commands
         if (command == "parse-manifests") {
@@ -705,13 +742,14 @@ int main(int argc, char* argv[]) {
             bool force = false;
             bool dryRun = false;
             bool cbsIntegration = false;
-            bool onlineMode = true; // Default to online mode
+            bool onlineMode = true;
             std::string tempDir;
             std::string logFile;
-            std::string imagePath; // NEW: offline image path for future extract scenarios
-            bool noPowerShell = false; // NEW: disable generic PowerShell fallback
-            bool noWusa = false;       // NEW: disable WUSA fallback
-            bool no7z = false;         // NEW: disable 7z fallback
+            std::string imagePath;
+            bool noPowerShell = false;
+            bool noWusa = false;
+            bool no7z = false;
+            bool noCatalogRegister = false; // NEW
             
             // Parse DISM-style parameters
             if (packagePath.find("/PackagePath:") == 0) {
@@ -752,19 +790,20 @@ int main(int argc, char* argv[]) {
                 } else if (arg == "--log" && i + 1 < argc) {
                     logFile = argv[++i];
                 } else if (arg == "--verbose") {
-                    // already handled globally
+                    // handled globally
                 } else if (arg == "--no-powershell") {
                     noPowerShell = true;
                 } else if (arg == "--no-wusa") {
-                    // Disable WUSA fallback
-                    // handled later
+                    // future: thread to handler
                 } else if (arg == "--no-7z") {
-                    // Disable 7z fallback
-                    // handled later
+                    // future: thread to handler
+                } else if (arg == "--no-catalog-register") {
+                    noCatalogRegister = true;
+                } else if (arg == "--timeout-ms" && i + 1 < argc) {
+                    g_opts.timeoutMs = argv[++i];
                 }
             }
 
-            // Normalize input package/extracted dir
             std::string userInputPath = packagePath;
             if (!useExtractedDir) {
                 packagePath = resolvePackagePath(packagePath);
@@ -800,9 +839,11 @@ int main(int argc, char* argv[]) {
             if (!logFile.empty()) {
                 std::cout << "Log File: " << logFile << "\n";
             }
-            if (noPowerShell) {
-                std::cout << "PowerShell Fallback: [DISABLED]\n";
+            if (!g_opts.timeoutMs.empty()) {
+                std::cout << "External tool timeout (ms): " << g_opts.timeoutMs << "\n";
             }
+            if (noPowerShell) std::cout << "PowerShell Fallback: [DISABLED]\n";
+            if (noCatalogRegister) std::cout << "Catalog Registration: [DISABLED]\n";
             std::cout << "\n";
 
             if (!onlineMode) {
@@ -815,12 +856,24 @@ int main(int argc, char* argv[]) {
                     std::cerr << "[FAILED] Offline image path invalid: " << reason << "\n";
                     return 1;
                 }
+                if (!dryRun) {
+                    std::string wr;
+                    if (!testOfflineImageWrite(imagePath, wr)) {
+                        std::cerr << "[FAILED] Offline image not writable: " << wr << "\n";
+                        return 1;
+                    }
+                }
             }
 
-            // CBS Integration Path
             if (cbsIntegration) {
                 std::cout << "=== Component-Based Servicing (CBS) Integration Mode ===\n";
                 std::cout << "Installation Target: " << (onlineMode ? "Live System (Online)" : "Offline Image") << "\n\n";
+
+                if (IsProcessElevated()) {
+                    std::cout << "Elevation: Administrator token detected\n";
+                } else {
+                    std::cout << "Elevation: Not elevated (Administrator). Some operations may fail; consider running as TrustedInstaller or using /Offline.\n";
+                }
 
                 if (dryRun) {
                     std::cout << "*** DRY RUN MODE - CBS operations will be simulated ***\n\n";
@@ -855,7 +908,9 @@ int main(int argc, char* argv[]) {
                     cbsManager.setAllowPowershellFallback(!noPowerShell);
                     cbsManager.setAllowWusaFallback(!noWusa);
                     cbsManager.setAllow7zFallback(!no7z);
+                    cbsManager.setAllowCatalogRegistration(!noCatalogRegister);
                     if (!imagePath.empty()) cbsManager.setOfflineImagePath(imagePath);
+                    // Apply env-based options (temp/log/timeout)
                     applyGlobalOptions(&cbsManager);
                     
                     std::cout << "[SUCCESS] CBS Manager initialized successfully\n";
