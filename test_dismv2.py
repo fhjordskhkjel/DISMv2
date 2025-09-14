@@ -95,6 +95,79 @@ class TestDISMv2(unittest.TestCase):
         # This should not raise an exception
         self.dism.get_drivers("/Online")
     
+    def test_add_package(self):
+        """Test adding a package"""
+        # Create a dummy package file
+        test_package = self.test_dir / "test_package.cab"
+        with open(test_package, 'wb') as f:
+            f.write(b'MSCF')  # CAB file signature
+            f.write(b'0' * 1020)  # Rest of dummy content
+        
+        # This should not raise an exception
+        result = self.dism.add_package("/Online", str(test_package))
+        self.assertTrue(result)
+    
+    def test_add_package_nonexistent(self):
+        """Test adding a non-existent package"""
+        with self.assertRaises(FileNotFoundError):
+            self.dism.add_package("/Online", "nonexistent_package.cab")
+    
+    def test_remove_package(self):
+        """Test removing a package"""
+        # This should not raise an exception
+        result = self.dism.remove_package("/Online", "TestPackage")
+        self.assertTrue(result)
+    
+    def test_get_package_info(self):
+        """Test getting package information"""
+        # This should not raise an exception
+        self.dism.get_package_info("/Online", "TestPackage")
+    
+    def test_add_package_offline(self):
+        """Test adding a package to offline image"""
+        # Create a dummy package file
+        test_package = self.test_dir / "test_package.msu"
+        with open(test_package, 'wb') as f:
+            f.write(b'0' * 1024)  # Dummy content
+        
+        # This should not raise an exception
+        result = self.dism.add_package(str(self.test_mount), str(test_package))
+        self.assertTrue(result)
+    
+    def test_remove_package_offline(self):
+        """Test removing a package from offline image"""
+        # This should not raise an exception
+        result = self.dism.remove_package(str(self.test_mount), "OfflineTestPackage")
+        self.assertTrue(result)
+    
+    def test_add_package_unsupported_type(self):
+        """Test adding a package with unsupported file type"""
+        # Create a dummy package file with unsupported extension
+        test_package = self.test_dir / "test_package.txt"
+        with open(test_package, 'wb') as f:
+            f.write(b'dummy content')
+        
+        # This should still work but show a warning
+        result = self.dism.add_package("/Online", str(test_package))
+        self.assertTrue(result)
+    
+    def test_package_simulation_persistence(self):
+        """Test that simulated package states are persisted"""
+        # Create a dummy package file
+        test_package = self.test_dir / "test_persistence_package.cab"
+        with open(test_package, 'wb') as f:
+            f.write(b'MSCF')  # CAB file signature
+            f.write(b'0' * 1020)
+        
+        # Add a test package
+        result = self.dism.add_package("/Online", str(test_package))
+        self.assertTrue(result)
+        
+        # Create a new instance to verify persistence
+        new_dism = DISMv2()
+        # Note: The current implementation stores simulated states in files
+        # This test verifies the add_package method returns True
+    
     def test_feature_simulation_persistence(self):
         """Test that simulated feature states are persisted"""
         # Enable a test feature

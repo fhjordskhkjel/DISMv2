@@ -421,6 +421,255 @@ Examples:
         for driver in sample_drivers:
             print(f"{driver['name']:<30} | {driver['version']:<15} | {driver['provider']}")
 
+    def add_package(self, target: str, package_path: str, prevent_pending: bool = False, ignore_check: bool = False):
+        """Add a package to the image or online system"""
+        self.logger.info(f"Adding package {package_path} to {target}")
+        print(f"Adding package: {package_path}")
+        
+        package_path = Path(package_path)
+        
+        # Validate package file exists
+        if not package_path.exists():
+            raise FileNotFoundError(f"Package file not found: {package_path}")
+        
+        # Check if it's a supported package type
+        supported_extensions = ['.cab', '.msu', '.msp']
+        if package_path.suffix.lower() not in supported_extensions:
+            print(f"Warning: Package type '{package_path.suffix}' may not be fully supported")
+            print(f"Supported types: {', '.join(supported_extensions)}")
+        
+        if target.lower() == "/online":
+            print("Note: Online package installation requires administrator privileges")
+            return self._add_package_online(package_path, prevent_pending, ignore_check)
+        else:
+            # For offline images
+            return self._add_package_offline(target, package_path, prevent_pending, ignore_check)
+
+    def remove_package(self, target: str, package_name: str):
+        """Remove a package from the image or online system"""
+        self.logger.info(f"Removing package {package_name} from {target}")
+        print(f"Removing package: {package_name}")
+        
+        if target.lower() == "/online":
+            print("Note: Online package removal requires administrator privileges")
+            return self._remove_package_online(package_name)
+        else:
+            # For offline images
+            return self._remove_package_offline(target, package_name)
+
+    def get_package_info(self, target: str, package_name: str):
+        """Get detailed information about a specific package"""
+        print(f"\nPackage Information for: {package_name}")
+        print("-" * 50)
+        
+        # Try to get real package info when possible
+        if target.lower() == "/online" and platform.system() == "Windows":
+            try:
+                # Use DISM to get actual package info on Windows
+                cmd = ["dism", "/online", "/get-packageinfo", f"/packagename:{package_name}"]
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(result.stdout)
+                return
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(f"DISM failed to get package info: {e.stderr}")
+            except FileNotFoundError:
+                self.logger.info("DISM not available for package info")
+        elif target.lower() != "/online":
+            # For offline images
+            if platform.system() == "Windows":
+                try:
+                    cmd = ["dism", f"/image:{target}", "/get-packageinfo", f"/packagename:{package_name}"]
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    print(result.stdout)
+                    return
+                except subprocess.CalledProcessError as e:
+                    self.logger.warning(f"DISM failed to get package info from image: {e.stderr}")
+                except FileNotFoundError:
+                    self.logger.info("DISM not available for offline image package info")
+        
+        # Fallback: Show simulated package info
+        print("[SIMULATION] Sample package information (actual query requires Windows DISM):")
+        print(f"Package Name: {package_name}")
+        print(f"State: Unknown")
+        print(f"Release Type: Unknown")
+        print(f"Install Time: Unknown")
+
+    def _add_package_online(self, package_path: Path, prevent_pending: bool = False, ignore_check: bool = False):
+        """Add a package to the online system"""
+        try:
+            if platform.system() == "Windows":
+                # Use DISM command for Windows
+                cmd = ["dism", "/online", "/add-package", f"/packagepath:{package_path}"]
+                if prevent_pending:
+                    cmd.append("/preventpending")
+                if ignore_check:
+                    cmd.append("/ignorecheck")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"Package {package_path.name} installed successfully.")
+                self.logger.info(f"DISM output: {result.stdout}")
+                
+                # Check if restart is required
+                if "restart" in result.stdout.lower() or "reboot" in result.stdout.lower():
+                    print("Warning: A restart may be required to complete the package installation.")
+                
+                return True
+            else:
+                # For non-Windows systems, simulate package installation
+                self._simulate_package_installation(package_path, "install")
+                return True
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to install package {package_path.name}: {e.stderr}"
+            self.logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            return False
+        except FileNotFoundError:
+            # DISM not available, fall back to simulation
+            self._simulate_package_installation(package_path, "install")
+            return True
+
+    def _remove_package_online(self, package_name: str):
+        """Remove a package from the online system"""
+        try:
+            if platform.system() == "Windows":
+                # Use DISM command for Windows
+                cmd = ["dism", "/online", "/remove-package", f"/packagename:{package_name}"]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"Package {package_name} removed successfully.")
+                self.logger.info(f"DISM output: {result.stdout}")
+                
+                # Check if restart is required
+                if "restart" in result.stdout.lower() or "reboot" in result.stdout.lower():
+                    print("Warning: A restart may be required to complete the package removal.")
+                
+                return True
+            else:
+                # For non-Windows systems, simulate package removal
+                self._simulate_package_installation(package_name, "remove")
+                return True
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to remove package {package_name}: {e.stderr}"
+            self.logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            return False
+        except FileNotFoundError:
+            # DISM not available, fall back to simulation
+            self._simulate_package_installation(package_name, "remove")
+            return True
+
+    def _add_package_offline(self, target: str, package_path: Path, prevent_pending: bool = False, ignore_check: bool = False):
+        """Add a package to an offline image"""
+        try:
+            if platform.system() == "Windows":
+                # Use DISM command for Windows
+                cmd = ["dism", f"/image:{target}", "/add-package", f"/packagepath:{package_path}"]
+                if prevent_pending:
+                    cmd.append("/preventpending")
+                if ignore_check:
+                    cmd.append("/ignorecheck")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"Package {package_path.name} added successfully to offline image.")
+                self.logger.info(f"DISM output: {result.stdout}")
+                return True
+            else:
+                # For non-Windows systems, simulate offline package installation
+                self._simulate_offline_package_installation(target, package_path, "install")
+                return True
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to add package {package_path.name} to offline image: {e.stderr}"
+            self.logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            return False
+        except FileNotFoundError:
+            # DISM not available, fall back to simulation
+            self._simulate_offline_package_installation(target, package_path, "install")
+            return True
+
+    def _remove_package_offline(self, target: str, package_name: str):
+        """Remove a package from an offline image"""
+        try:
+            if platform.system() == "Windows":
+                # Use DISM command for Windows
+                cmd = ["dism", f"/image:{target}", "/remove-package", f"/packagename:{package_name}"]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"Package {package_name} removed successfully from offline image.")
+                self.logger.info(f"DISM output: {result.stdout}")
+                return True
+            else:
+                # For non-Windows systems, simulate offline package removal
+                self._simulate_offline_package_installation(target, package_name, "remove")
+                return True
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to remove package {package_name} from offline image: {e.stderr}"
+            self.logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            return False
+        except FileNotFoundError:
+            # DISM not available, fall back to simulation
+            self._simulate_offline_package_installation(target, package_name, "remove")
+            return True
+
+    def _simulate_package_installation(self, package_path_or_name, action: str):
+        """Simulate package installation/removal for non-Windows systems"""
+        item_name = package_path_or_name.name if hasattr(package_path_or_name, 'name') else str(package_path_or_name)
+        action_text = "Installed" if action == "install" else "Removed"
+        print(f"[SIMULATION] {action_text} package {item_name} on {platform.system()}")
+        print(f"Note: Actual Windows package management requires a Windows environment")
+        
+        # Store the simulated state in a local file for consistency
+        state_file = self.scratch_dir / "simulated_packages.json"
+        
+        try:
+            if state_file.exists():
+                with open(state_file, 'r') as f:
+                    packages = json.load(f)
+            else:
+                packages = {}
+            
+            if action == "install":
+                packages[item_name] = {"state": "Installed", "simulated": True}
+            elif action == "remove":
+                if item_name in packages:
+                    del packages[item_name]
+            
+            with open(state_file, 'w') as f:
+                json.dump(packages, f, indent=2)
+                
+        except Exception as e:
+            self.logger.warning(f"Could not save simulated package state: {e}")
+
+    def _simulate_offline_package_installation(self, target: str, package_path_or_name, action: str):
+        """Simulate offline package installation/removal for non-Windows systems"""
+        item_name = package_path_or_name.name if hasattr(package_path_or_name, 'name') else str(package_path_or_name)
+        action_text = "Installed" if action == "install" else "Removed"
+        print(f"[SIMULATION] {action_text} package {item_name} in offline image {target}")
+        print(f"Note: Actual offline Windows image modification requires Windows DISM tools")
+        
+        # Store the simulated state for the specific image
+        image_state_file = self.scratch_dir / f"image_packages_{hash(target)}.json"
+        
+        try:
+            if image_state_file.exists():
+                with open(image_state_file, 'r') as f:
+                    packages = json.load(f)
+            else:
+                packages = {}
+            
+            if action == "install":
+                packages[item_name] = {"state": "Installed", "simulated": True, "target": target}
+            elif action == "remove":
+                if item_name in packages:
+                    del packages[item_name]
+            
+            with open(image_state_file, 'w') as f:
+                json.dump(packages, f, indent=2)
+                
+        except Exception as e:
+            self.logger.warning(f"Could not save simulated package state for image: {e}")
+
     def _enable_feature_online(self, feature_name: str, all_features: bool = False):
         """Enable a Windows feature on the running system"""
         try:
@@ -681,6 +930,26 @@ def main():
             
         elif args.get('get_packages'):
             dism.get_packages(target)
+            
+        elif args.get('add_package'):
+            if not args.get('packagepath'):
+                print("Error: /PackagePath is required for /Add-Package")
+                return 1
+            prevent_pending = args.get('preventpending', False)
+            ignore_check = args.get('ignorecheck', False)
+            dism.add_package(target, args['packagepath'], prevent_pending, ignore_check)
+            
+        elif args.get('remove_package'):
+            if not args.get('packagename'):
+                print("Error: /PackageName is required for /Remove-Package")
+                return 1
+            dism.remove_package(target, args['packagename'])
+            
+        elif args.get('get_packageinfo'):
+            if not args.get('packagename'):
+                print("Error: /PackageName is required for /Get-PackageInfo")
+                return 1
+            dism.get_package_info(target, args['packagename'])
             
         elif args.get('get_drivers'):
             dism.get_drivers(target)
