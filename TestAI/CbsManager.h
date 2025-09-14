@@ -26,6 +26,13 @@ inline DWORD ExternalTimeoutMs(DWORD defaultMs) {
     return defaultMs;
 }
 
+// Operation statistics for last run
+struct OperationStats {
+    size_t copied = 0;
+    size_t skipped = 0;
+    size_t failed = 0;
+};
+
 // CBS Integration Structures
 struct CbsComponentInfo {
     std::string identity;
@@ -151,6 +158,9 @@ public:
     std::optional<std::string> getLastError() const { return lastError; }
     std::string getDetailedErrorLog() const { return errorLog; }
     bool enableCbsLogging(const std::string& logPath);
+
+    // Operation stats
+    OperationStats getLastOperationStats() const { return lastStats; }
     
     // Utility Functions
     bool isSystemOnline() const { return systemOnline; }
@@ -180,6 +190,7 @@ private:
     CbsTransactionState transactionState;
     std::optional<std::string> logFilePath;
     mutable std::mutex errorLogMutex;
+    OperationStats lastStats{};
     
     // COM interfaces for CBS
     CComPtr<IUnknown> cbsSession;
