@@ -6,9 +6,17 @@
 #include <optional>
 #include <filesystem>
 #include <functional>
+#include <windows.h>
+#include <iostream>
 #include <fci.h>
 #include <fdi.h>
-#include <windows.h>
+
+#ifdef ERROR
+#undef ERROR
+#endif
+#ifdef WARNING
+#undef WARNING
+#endif
 
 // File signature constants
 namespace FileSignatures {
@@ -299,10 +307,8 @@ private:
     std::string getDirectoryFromPathStr(const std::string& path);
     std::string getRelativePathStr(const std::string& fullPath, const std::string& basePath);
 
-    // Static callback functions for FDI/FCI
+    // Static callback functions for FDI/FCI (kept in implementation, not exposed here)
     static INT_PTR DIAMONDAPI fdiNotify(FDINOTIFICATIONTYPE fdint, PFDINOTIFICATION pfdin);
-    
-    // FCI callback implementations
     static BOOL DIAMONDAPI fciGetNextCab(PCCAB pccab, ULONG cbPrevCab, void* pv);
     static int DIAMONDAPI fciFilePlaced(PCCAB pccab, char* pszFile, LONG cbFile, BOOL fContinuation, void* pv);
     static void* DIAMONDAPI fciAlloc(ULONG cb);
@@ -315,7 +321,6 @@ private:
     static int DIAMONDAPI fciDelete(char* pszFile, int* err, void* pv);
     static BOOL DIAMONDAPI fciGetTempFile(char* pszTempName, int cbTempName, void* pv);
 
-    // FDI callback implementations
     static void* DIAMONDAPI fdiAlloc(ULONG cb);
     static void DIAMONDAPI fdiFree(void* pv);
     static INT_PTR DIAMONDAPI fdiOpen(char* pszFile, int oflag, int pmode);
