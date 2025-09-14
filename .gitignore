@@ -375,3 +375,7 @@ temp/
 dismv2_temp/
 *.log
 package_test_files/
+# Build artifacts (for testing)
+TestAI/*.o
+TestAI/unit_tests
+TestAI/test_output/
