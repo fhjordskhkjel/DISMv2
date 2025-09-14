@@ -22,6 +22,10 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - Symlink/reparse-point skipping during file installation
 - expand.exe self-target guard: auto-redirect CAB expansion to a subfolder if input and output directories match
 - Clearer online permission diagnostics; access preflight for Windows\servicing\Packages
+- Catalog registration toggle: --no-catalog-register to disable adding catalogs to the system store
+- Tool timeout override: --timeout-ms N (or env DISMV2_TIMEOUT_MS) to control external tool timeouts
+- Better payload mapping: improved destination mapping for Boot, Recovery, LCU, System32\Drivers, Fonts, INF, PolicyDefinitions, SysWOW64
+- PSF/WIM handling in CBS flow: .appx/.msix/.psf/.wim/.esd routed to specialized handler instead of plain file copy
 
 ## Commands
 - `extract-psf <package> <dest>`
@@ -40,6 +44,8 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - `--security-validation`, `--force`, `--dry-run`
 - `--temp-dir <path>`, `--log <file>`, `--verbose`
 - `--no-powershell`, `--no-wusa`, `--no-7z`
+- `--no-catalog-register` (disable system catalog registration)
+- `--timeout-ms <int>` (override external tool timeouts)
 
 ## MSU extraction details
 Order of methods attempted:
@@ -51,7 +57,7 @@ Notes:
 - DISM `/Extract` is not valid for `/Online`; use `/Offline` with `/Image:<path>`.
 - UNC inputs may be staged locally before extraction.
 - Long-path prefix (\\?\) applied to tool arguments to avoid MAX_PATH.
-- Catalog verification and registration operate only on catalogs copied during the session.
+- Catalog verification/registration applies only to catalogs copied during the session (registration can be disabled).
 
 ## Environment overrides
 - `DISMV2_TEMP`: override temp/staging root
@@ -80,6 +86,8 @@ Notes:
   - `DISMv2.exe add-package-enhanced /PackagePath:"C:\updates\KB.msu" /CBS /Offline /Image:"D:\Mount" --log C:\logs\dismv2.log --verbose`
 - Disable specific fallbacks
   - `DISMv2.exe add-package-enhanced /PackagePath:"C:\updates\KB.msu" /CBS /Online --no-powershell --no-wusa --no-7z`
+- Disable catalog registration and set timeout
+  - `DISMv2.exe add-package-enhanced /PackagePath:"C:\updates\KB.msu" /CBS /Online --no-catalog-register --timeout-ms 900000`
 
 ## Status
 Build-ready and tested. Use `--log` and `--verbose` for best diagnostics.

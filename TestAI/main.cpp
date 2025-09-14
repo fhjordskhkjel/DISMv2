@@ -794,9 +794,9 @@ int main(int argc, char* argv[]) {
                 } else if (arg == "--no-powershell") {
                     noPowerShell = true;
                 } else if (arg == "--no-wusa") {
-                    // future: thread to handler
+                    noWusa = true;
                 } else if (arg == "--no-7z") {
-                    // future: thread to handler
+                    no7z = true;
                 } else if (arg == "--no-catalog-register") {
                     noCatalogRegister = true;
                 } else if (arg == "--timeout-ms" && i + 1 < argc) {
