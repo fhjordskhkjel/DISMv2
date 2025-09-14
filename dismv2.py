@@ -153,7 +153,23 @@ Examples:
         
         if commit and not discard:
             self.logger.info(f"Committing changes to {mount_info['image_path']}")
-            # In a real implementation, this would save changes back to the image
+            # Implement real commit functionality
+            if platform.system() == "Windows":
+                try:
+                    # Use DISM to commit changes on Windows
+                    cmd = ["dism", "/commit-image", f"/mountdir:{mount_path}"]
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    print("Changes committed successfully to image.")
+                    self.logger.info(f"DISM commit output: {result.stdout}")
+                except subprocess.CalledProcessError as e:
+                    self.logger.error(f"Failed to commit image changes: {e.stderr}")
+                    print(f"Warning: Failed to commit changes: {e.stderr}")
+                except FileNotFoundError:
+                    print("[SIMULATION] Changes would be committed to image file")
+                    self.logger.info("DISM not available, simulating commit")
+            else:
+                print("[SIMULATION] Changes would be committed to image file")
+                self.logger.info("Simulating commit on non-Windows system")
             
         self.logger.info(f"Unmounting image from {mount_path}")
         
@@ -196,15 +212,75 @@ Examples:
         else:
             print("Index: All available indexes")
         
-        # In a real implementation, this would parse the image file
-        # and extract detailed information about the Windows installation
+        # Implement real image parsing when possible
+        if platform.system() == "Windows":
+            try:
+                # Use DISM to get actual image information on Windows
+                cmd = ["dism", "/get-imageinfo", f"/imagefile:{image_path}"]
+                if index:
+                    cmd.extend(["/index", str(index)])
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print("\nDetailed Image Information:")
+                print(result.stdout)
+                self.logger.info(f"DISM imageinfo output retrieved successfully")
+                return
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(f"DISM failed to get image info: {e.stderr}")
+            except FileNotFoundError:
+                self.logger.info("DISM not available for image parsing")
+        
+        # Fallback: Basic file analysis
+        print("\n[BASIC ANALYSIS] Limited information available without Windows DISM:")
+        print(f"Creation Time: {os.path.getctime(image_path)}")
+        print(f"Modification Time: {os.path.getmtime(image_path)}")
+        
+        # Try to detect image type from file signature
+        try:
+            with open(image_path, 'rb') as f:
+                header = f.read(16)
+                if header.startswith(b'MSWIM\x00\x00\x00'):
+                    print("Image Type: Windows Imaging Format (WIM)")
+                elif header.startswith(b'conectix'):
+                    print("Image Type: Virtual Hard Disk (VHD)")
+                else:
+                    print("Image Type: Unknown or corrupted")
+        except Exception as e:
+            self.logger.warning(f"Could not read image header: {e}")
+            print("Image Type: Could not determine")
         
     def get_features(self, target: str):
         """Get Windows features information"""
         print(f"\nWindows Features in {target}:")
         print("-" * 50)
         
-        # Sample features - in real implementation would query actual features
+        # Try to get real features when possible
+        if target.lower() == "/online" and platform.system() == "Windows":
+            try:
+                # Use DISM to get actual features on Windows
+                cmd = ["dism", "/online", "/get-features"]
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(result.stdout)
+                return
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(f"DISM failed to get features: {e.stderr}")
+            except FileNotFoundError:
+                self.logger.info("DISM not available for feature enumeration")
+        elif target.lower() != "/online":
+            # For offline images
+            if platform.system() == "Windows":
+                try:
+                    cmd = ["dism", f"/image:{target}", "/get-features"]
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    print(result.stdout)
+                    return
+                except subprocess.CalledProcessError as e:
+                    self.logger.warning(f"DISM failed to get features from image: {e.stderr}")
+                except FileNotFoundError:
+                    self.logger.info("DISM not available for offline image feature enumeration")
+        
+        # Fallback: Show sample features with simulation notice
+        print("[SIMULATION] Sample Windows features (actual query requires Windows DISM):")
         sample_features = [
             {"name": "IIS-WebServerRole", "state": "Disabled"},
             {"name": "IIS-WebServer", "state": "Disabled"},
@@ -215,8 +291,29 @@ Examples:
             {"name": "Microsoft-Hyper-V-All", "state": "Disabled"},
         ]
         
+        # Check for simulated feature states
+        if target.lower() == "/online":
+            state_file = self.scratch_dir / "simulated_features.json"
+        else:
+            state_file = self.scratch_dir / f"image_features_{hash(target)}.json"
+        
+        simulated_features = {}
+        if state_file.exists():
+            try:
+                with open(state_file, 'r') as f:
+                    simulated_features = json.load(f)
+            except Exception as e:
+                self.logger.warning(f"Could not read simulated features: {e}")
+        
+        # Update sample features with simulated states
         for feature in sample_features:
-            print(f"{feature['name']:<40} | {feature['state']}")
+            if feature["name"] in simulated_features:
+                feature["state"] = simulated_features[feature["name"]]["state"]
+                feature["simulated"] = True
+        
+        for feature in sample_features:
+            sim_indicator = " [SIM]" if feature.get("simulated") else ""
+            print(f"{feature['name']:<40} | {feature['state']}{sim_indicator}")
     
     def enable_feature(self, target: str, feature_name: str, all_features: bool = False):
         """Enable a Windows feature"""
@@ -225,9 +322,10 @@ Examples:
         
         if target.lower() == "/online":
             print("Note: Online feature changes require administrator privileges")
-        
-        # In real implementation, would modify the image or online system
-        print(f"Feature {feature_name} enabled successfully.")
+            return self._enable_feature_online(feature_name, all_features)
+        else:
+            # For offline images
+            return self._enable_feature_offline(target, feature_name, all_features)
         
     def disable_feature(self, target: str, feature_name: str, remove: bool = False):
         """Disable a Windows feature"""
@@ -236,16 +334,43 @@ Examples:
         
         if target.lower() == "/online":
             print("Note: Online feature changes require administrator privileges")
-        
-        # In real implementation, would modify the image or online system
-        print(f"Feature {feature_name} disabled successfully.")
+            return self._disable_feature_online(feature_name, remove)
+        else:
+            # For offline images
+            return self._disable_feature_offline(target, feature_name, remove)
         
     def get_packages(self, target: str):
         """Get installed packages information"""
         print(f"\nPackages in {target}:")
         print("-" * 80)
         
-        # Sample packages - in real implementation would query actual packages
+        # Try to get real packages when possible
+        if target.lower() == "/online" and platform.system() == "Windows":
+            try:
+                # Use DISM to get actual packages on Windows
+                cmd = ["dism", "/online", "/get-packages"]
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(result.stdout)
+                return
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(f"DISM failed to get packages: {e.stderr}")
+            except FileNotFoundError:
+                self.logger.info("DISM not available for package enumeration")
+        elif target.lower() != "/online":
+            # For offline images
+            if platform.system() == "Windows":
+                try:
+                    cmd = ["dism", f"/image:{target}", "/get-packages"]
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    print(result.stdout)
+                    return
+                except subprocess.CalledProcessError as e:
+                    self.logger.warning(f"DISM failed to get packages from image: {e.stderr}")
+                except FileNotFoundError:
+                    self.logger.info("DISM not available for offline image package enumeration")
+        
+        # Fallback: Show sample packages with simulation notice
+        print("[SIMULATION] Sample Windows packages (actual query requires Windows DISM):")
         sample_packages = [
             {"name": "Microsoft-Windows-Client-Features-Package", "state": "Installed"},
             {"name": "Microsoft-Windows-NetFx3-OnDemand-Package", "state": "Installed"},
@@ -260,7 +385,33 @@ Examples:
         print(f"\nDrivers in {target}:")
         print("-" * 80)
         
-        # Sample drivers - in real implementation would query actual drivers
+        # Try to get real drivers when possible
+        if target.lower() == "/online" and platform.system() == "Windows":
+            try:
+                # Use DISM to get actual drivers on Windows
+                cmd = ["dism", "/online", "/get-drivers"]
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(result.stdout)
+                return
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(f"DISM failed to get drivers: {e.stderr}")
+            except FileNotFoundError:
+                self.logger.info("DISM not available for driver enumeration")
+        elif target.lower() != "/online":
+            # For offline images
+            if platform.system() == "Windows":
+                try:
+                    cmd = ["dism", f"/image:{target}", "/get-drivers"]
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    print(result.stdout)
+                    return
+                except subprocess.CalledProcessError as e:
+                    self.logger.warning(f"DISM failed to get drivers from image: {e.stderr}")
+                except FileNotFoundError:
+                    self.logger.info("DISM not available for offline image driver enumeration")
+        
+        # Fallback: Show sample drivers with simulation notice
+        print("[SIMULATION] Sample drivers (actual query requires Windows DISM):")
         sample_drivers = [
             {"name": "Audio Device Driver", "version": "10.0.1.2", "provider": "Microsoft"},
             {"name": "Network Adapter Driver", "version": "1.2.3.4", "provider": "Intel"},
@@ -269,6 +420,162 @@ Examples:
         
         for driver in sample_drivers:
             print(f"{driver['name']:<30} | {driver['version']:<15} | {driver['provider']}")
+
+    def _enable_feature_online(self, feature_name: str, all_features: bool = False):
+        """Enable a Windows feature on the running system"""
+        try:
+            if platform.system() == "Windows":
+                # Use DISM command for Windows
+                cmd = ["dism", "/online", "/enable-feature", f"/featurename:{feature_name}"]
+                if all_features:
+                    cmd.append("/all")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"Feature {feature_name} enabled successfully.")
+                self.logger.info(f"DISM output: {result.stdout}")
+                return True
+            else:
+                # For non-Windows systems, simulate feature management
+                self._simulate_feature_management(feature_name, "enable")
+                return True
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to enable feature {feature_name}: {e.stderr}"
+            self.logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            return False
+        except FileNotFoundError:
+            # DISM not available, fall back to simulation
+            self._simulate_feature_management(feature_name, "enable")
+            return True
+
+    def _disable_feature_online(self, feature_name: str, remove: bool = False):
+        """Disable a Windows feature on the running system"""
+        try:
+            if platform.system() == "Windows":
+                # Use DISM command for Windows
+                cmd = ["dism", "/online", "/disable-feature", f"/featurename:{feature_name}"]
+                if remove:
+                    cmd.append("/remove")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"Feature {feature_name} disabled successfully.")
+                self.logger.info(f"DISM output: {result.stdout}")
+                return True
+            else:
+                # For non-Windows systems, simulate feature management
+                self._simulate_feature_management(feature_name, "disable")
+                return True
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to disable feature {feature_name}: {e.stderr}"
+            self.logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            return False
+        except FileNotFoundError:
+            # DISM not available, fall back to simulation
+            self._simulate_feature_management(feature_name, "disable")
+            return True
+
+    def _enable_feature_offline(self, target: str, feature_name: str, all_features: bool = False):
+        """Enable a Windows feature in an offline image"""
+        try:
+            if platform.system() == "Windows":
+                # Use DISM command for Windows
+                cmd = ["dism", f"/image:{target}", "/enable-feature", f"/featurename:{feature_name}"]
+                if all_features:
+                    cmd.append("/all")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"Feature {feature_name} enabled successfully in offline image.")
+                self.logger.info(f"DISM output: {result.stdout}")
+                return True
+            else:
+                # For non-Windows systems, simulate offline feature management
+                self._simulate_offline_feature_management(target, feature_name, "enable")
+                return True
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to enable feature {feature_name} in offline image: {e.stderr}"
+            self.logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            return False
+        except FileNotFoundError:
+            # DISM not available, fall back to simulation
+            self._simulate_offline_feature_management(target, feature_name, "enable")
+            return True
+
+    def _disable_feature_offline(self, target: str, feature_name: str, remove: bool = False):
+        """Disable a Windows feature in an offline image"""
+        try:
+            if platform.system() == "Windows":
+                # Use DISM command for Windows
+                cmd = ["dism", f"/image:{target}", "/disable-feature", f"/featurename:{feature_name}"]
+                if remove:
+                    cmd.append("/remove")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"Feature {feature_name} disabled successfully in offline image.")
+                self.logger.info(f"DISM output: {result.stdout}")
+                return True
+            else:
+                # For non-Windows systems, simulate offline feature management
+                self._simulate_offline_feature_management(target, feature_name, "disable")
+                return True
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to disable feature {feature_name} in offline image: {e.stderr}"
+            self.logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            return False
+        except FileNotFoundError:
+            # DISM not available, fall back to simulation
+            self._simulate_offline_feature_management(target, feature_name, "disable")
+            return True
+
+    def _simulate_feature_management(self, feature_name: str, action: str):
+        """Simulate feature management for non-Windows systems"""
+        print(f"[SIMULATION] {action.capitalize()}d feature {feature_name} on {platform.system()}")
+        print(f"Note: Actual Windows feature management requires a Windows environment")
+        
+        # Store the simulated state in a local file for consistency
+        state_file = self.scratch_dir / "simulated_features.json"
+        
+        try:
+            if state_file.exists():
+                with open(state_file, 'r') as f:
+                    features = json.load(f)
+            else:
+                features = {}
+            
+            features[feature_name] = {"state": "Enabled" if action == "enable" else "Disabled", 
+                                    "simulated": True}
+            
+            with open(state_file, 'w') as f:
+                json.dump(features, f, indent=2)
+                
+        except Exception as e:
+            self.logger.warning(f"Could not save simulated feature state: {e}")
+
+    def _simulate_offline_feature_management(self, target: str, feature_name: str, action: str):
+        """Simulate offline feature management for non-Windows systems"""
+        print(f"[SIMULATION] {action.capitalize()}d feature {feature_name} in offline image {target}")
+        print(f"Note: Actual offline Windows image modification requires Windows DISM tools")
+        
+        # Store the simulated state for the specific image
+        image_state_file = self.scratch_dir / f"image_features_{hash(target)}.json"
+        
+        try:
+            if image_state_file.exists():
+                with open(image_state_file, 'r') as f:
+                    features = json.load(f)
+            else:
+                features = {}
+            
+            features[feature_name] = {"state": "Enabled" if action == "enable" else "Disabled", 
+                                    "simulated": True, "target": target}
+            
+            with open(image_state_file, 'w') as f:
+                json.dump(features, f, indent=2)
+                
+        except Exception as e:
+            self.logger.warning(f"Could not save simulated feature state for image: {e}")
 
 def parse_dism_args():
     """Parse DISM-style arguments with / prefix"""
