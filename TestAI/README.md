@@ -1,25 +1,27 @@
 # DISMv2 - Universal Windows Package Manager (C++20)
 
-DISMv2 is a modern, C++20 Windows package tool with support for CAB, MSU, PSF/APPX/MSIX, and WIM operations. It provides enhanced extraction, CBS-style installation, and robust diagnostics with Unicode-safe process handling.
+A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/APPX/MSIX, and WIM. It features DISM-like CBS integration, robust extraction with safe fallbacks, Unicode-safe process execution, and hardened logging/staging.
 
 ## Highlights
 - Universal package handling: CAB, MSU, PSF/APPX/MSIX, WIM
-- C++20 throughout (`std::filesystem`, safe processes, improved error handling)
-- Unicode-safe process execution (`CreateProcessW`) with stdout/stderr capture
-- Multiple extraction strategies with intelligent fallbacks
-- Optional CBS-integrated install flow (transaction-like stages)
+- C++20 throughout (std::filesystem, safer process and error handling)
+- Unicode-safe CreateProcessW with stdout/stderr capture and job kill-on-timeout
+- Multiple extraction strategies with intelligent fallbacks and long-path support
+- Optional CBS-integrated install flow (transaction-like phases)
 - Hardened temp and logging with environment overrides
 - Absolute System32 tool invocation (expand/dism/wusa) and WOW64-safe resolution
-- UNC-safe extraction (auto local staging copy) and long-path support
+- UNC-safe extraction (auto local copy) and reparse-point/skipped symlink safety
 
 ## New in this build
-- Fixed MSU extraction: prefer `expand.exe`, fallback to `wusa /extract`, optional DISM `/Image` extract
-- Added offline image support: use `/Offline /Image:<path>` with validation
-- Added `--verbose` diagnostics and size-based log rotation
-- Added `--no-powershell`, `--no-wusa`, `--no-7z` to control fallbacks
-- Early path resolution for `add-package-enhanced` (absolute, cwd, exe dir)
-- Long path prefixes for tool args and Job Object to kill timed-out child processes
+- MSU extraction fixes: prefer expand.exe, optional DISM /Image extract, fallback wusa /extract
+- Offline image servicing: /Offline with /Image:<path> validation and applicability checks
+- Verbose diagnostics and size-based log rotation
+- Fallback controls: --no-powershell, --no-wusa, --no-7z
+- Early path resolution for add-package-enhanced (absolute, cwd, exe-dir)
+- Long-path prefixes for tool args; job object kills timed-out child processes
 - Symlink/reparse-point skipping during file installation
+- expand.exe self-target guard: auto-redirect CAB expansion to a subfolder if input and output directories match
+- Clearer online permission diagnostics; access preflight for Windows\servicing\Packages
 
 ## Commands
 - `extract-psf <package> <dest>`
@@ -33,7 +35,7 @@ DISMv2 is a modern, C++20 Windows package tool with support for CAB, MSU, PSF/AP
 ## add-package-enhanced options
 - `/CBS` or `--cbs-integration`: CBS-style installation
 - `/Online` (default) or `/Offline`
-- `/Image:<path>`: Required when using `/Offline`; must contain `Windows\WinSxS` and `Windows\servicing\Packages`
+- `/Image:<path>`: required with `/Offline`; must contain `Windows\WinSxS` and `Windows\servicing\Packages`
 - `/PackagePath:<path>` or `/ExtractedDir:<path>`
 - `--security-validation`, `--force`, `--dry-run`
 - `--temp-dir <path>`, `--log <file>`, `--verbose`
@@ -46,13 +48,15 @@ Order of methods attempted:
 3. `wusa.exe "<msu>" /extract:"<dest>" /quiet /norestart`
 
 Notes:
-- DISM `/Extract` is not valid for `/Online`. Use `/Image:<path>` in offline mode.
-- UNC inputs are staged to local temp before extraction.
-- Long-path prefix (\\?\) applied to tool arguments to avoid MAX_PATH issues.
+- DISM `/Extract` is not valid for `/Online`; use `/Offline` with `/Image:<path>`.
+- UNC inputs may be staged locally before extraction.
+- Long-path prefix (\\?\) applied to tool arguments to avoid MAX_PATH.
+- Catalog verification and registration operate only on catalogs copied during the session.
 
 ## Environment overrides
 - `DISMV2_TEMP`: override temp/staging root
 - `DISMV2_LOG`: path to a log file sink
+- `DISMV2_TIMEOUT_MS`: override external tool timeouts (expand/dism/wusa)
 
 ## Logging and diagnostics
 - `--verbose` logs executed commands
@@ -61,12 +65,12 @@ Notes:
 
 ## Building
 - C++20, Windows desktop, x64
-- Requires Windows SDK components for AppxPackaging and MSXML
+- Requires Windows SDK: AppxPackaging and MSXML
 
 ## Security
 - Reduced PowerShell usage; prefer native tools
 - Unicode-safe process calls; absolute System32 tool resolution
-- Skips symlink/reparse points during file installation
+- Skips reparse points during file installation
 - Optional signature verification via WinVerifyTrust
 
 ## Examples
@@ -82,4 +86,4 @@ Build-ready and tested. Use `--log` and `--verbose` for best diagnostics.
 
 ---
 
-**The CAB File Handler is now called the Windows package management solution**
+**Windows package management solution (formerly “CAB File Handler”).**

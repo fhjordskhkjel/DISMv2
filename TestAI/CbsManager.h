@@ -15,6 +15,17 @@
 #include <atlbase.h>
 #include <objbase.h>
 
+// Helper for external tool timeout override
+inline DWORD ExternalTimeoutMs(DWORD defaultMs) {
+    char buf[32] = {};
+    DWORD n = GetEnvironmentVariableA("DISMV2_TIMEOUT_MS", buf, static_cast<DWORD>(sizeof(buf)));
+    if (n > 0 && n < sizeof(buf)) {
+        char* end = nullptr; unsigned long v = strtoul(buf, &end, 10);
+        if (v > 0 && v < 0xFFFFFFFFul) return static_cast<DWORD>(v);
+    }
+    return defaultMs;
+}
+
 // CBS Integration Structures
 struct CbsComponentInfo {
     std::string identity;
@@ -84,6 +95,7 @@ public:
     void setAllowPowershellFallback(bool allow) { allowPowershellFallback = allow; }
     void setAllowWusaFallback(bool allow) { allowWusaFallback = allow; }
     void setAllow7zFallback(bool allow) { allow7zFallback = allow; }
+    void setAllowCatalogRegistration(bool allow) { allowCatalogRegistration = allow; }
 
     // CBS Package Analysis
     std::optional<CbsPackageInfo> analyzePackage(const std::string& packagePath);
@@ -163,6 +175,7 @@ private:
     bool allowPowershellFallback = true;
     bool allowWusaFallback = true;
     bool allow7zFallback = true;
+    bool allowCatalogRegistration = true;
     std::string offlineImagePath;
     CbsTransactionState transactionState;
     std::optional<std::string> logFilePath;

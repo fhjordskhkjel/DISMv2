@@ -948,14 +948,18 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
 
     // Verify/register only catalogs we just copied
     try {
-        for (const auto& catTarget : copiedCatalogTargets) {
-            std::wstring w = catTarget.wstring();
-            bool ok = VerifySignatureWintrust(w);
-            appendToErrorLog(std::string("Catalog signature ") + (ok?"OK: ":"FAILED: ") + catTarget.string());
-            if (!RegisterCatalog(w)) {
-                DWORD le = GetLastError();
-                appendToErrorLog(std::string("Catalog registration failed (") + std::to_string(le) + "): " + catTarget.string());
+        if (allowCatalogRegistration) {
+            for (const auto& catTarget : copiedCatalogTargets) {
+                std::wstring w = catTarget.wstring();
+                bool ok = VerifySignatureWintrust(w);
+                appendToErrorLog(std::string("Catalog signature ") + (ok?"OK: ":"FAILED: ") + catTarget.string());
+                if (!RegisterCatalog(w)) {
+                    DWORD le = GetLastError();
+                    appendToErrorLog(std::string("Catalog registration failed (") + std::to_string(le) + "): " + catTarget.string());
+                }
             }
+        } else {
+            appendToErrorLog("Catalog registration disabled by configuration; signatures will still be verified if needed");
         }
     } catch (...) {
         appendToErrorLog("Catalog verification/registration encountered errors");
@@ -1069,12 +1073,12 @@ bool CbsManager::extractMsuForAnalysis(const std::string& msuPath, const std::st
         // Optional DISM offline extract
         if (!offlineImagePath.empty()) {
             std::wstring dism = getSystemToolPath(L"dism.exe");
-            std::wstring wImg(offlineImagePath.begin(), offlineImagePath.end());
-            std::wstring wMsu(msuPath.begin(), msuPath.end());
-            std::wstring wOut(destination.begin(), destination.end());
+            std::wstring wImg = ToLongPath(std::wstring(offlineImagePath.begin(), offlineImagePath.end()));
+            std::wstring wMsu = ToLongPath(std::wstring(msuPath.begin(), msuPath.end()));
+            std::wstring wOut = ToLongPath(std::wstring(destination.begin(), destination.end()));
             std::wstring cmd = L"\"" + dism + L"\" /Image:\"" + wImg + L"\" /Add-Package /PackagePath:\"" + wMsu + L"\" /Extract:\"" + wOut + L"\"";
             std::string outText; DWORD code = 1;
-            if (RunProcessCapture(cmd, 600000, outText, code)) {
+            if (RunProcessCapture(cmd, /*timeout*/ExternalTimeoutMs(600000), outText, code)) {
                 appendToErrorLog("dism /Extract output: " + outText);
                 if (code == 0) { ExpandAllCabsInDir(this, destination); return true; }
             }
@@ -1082,11 +1086,11 @@ bool CbsManager::extractMsuForAnalysis(const std::string& msuPath, const std::st
         // Optional WUSA fallback if allowed
         if (allowWusaFallback) {
             std::wstring wusa = getSystemToolPath(L"wusa.exe");
-            std::wstring wMsu(msuPath.begin(), msuPath.end());
-            std::wstring wOut(destination.begin(), destination.end());
+            std::wstring wMsu = ToLongPath(std::wstring(msuPath.begin(), msuPath.end()));
+            std::wstring wOut = ToLongPath(std::wstring(destination.begin(), destination.end()));
             std::wstring cmd = L"\"" + wusa + L"\" \"" + wMsu + L"\" /extract:\"" + wOut + L"\" /quiet /norestart";
             std::string outText; DWORD code = 1;
-            if (RunProcessCapture(cmd, 600000, outText, code)) {
+            if (RunProcessCapture(cmd, /*timeout*/ExternalTimeoutMs(600000), outText, code)) {
                 appendToErrorLog("wusa /extract output: " + outText);
                 if (code == 0) { ExpandAllCabsInDir(this, destination); return true; }
             }
@@ -1246,11 +1250,24 @@ std::vector<std::string> CbsManager::getApplicabilityFailures(const CbsPackageIn
 
 bool CbsManager::createStagingDirectory(const std::string& basePath, std::string& stagingPath) {
     try {
-        fs::path base = basePath.empty() ? fs::temp_directory_path() : fs::path(basePath);
-        fs::path dir = base / ("dismv2_" + std::to_string(::GetTickCount64()));
-        fs::create_directories(dir);
+        fs::path base;
+        if (!basePath.empty()) {
+            base = fs::path(basePath);
+        } else {
+            char buf[MAX_PATH] = {};
+            DWORD n = GetEnvironmentVariableA("DISMV2_TEMP", buf, static_cast<DWORD>(sizeof(buf)));
+            if (n > 0 && n < sizeof(buf)) {
+                base = fs::path(std::string(buf));
+            } else {
+                base = fs::temp_directory_path();
+            }
+        }
+        // use PID + ticks to reduce collision
+        DWORD pid = GetCurrentProcessId();
+        fs::path dir = base / ("dismv2_" + std::to_string(pid) + "_" + std::to_string(::GetTickCount64()));
+        std::error_code ec; fs::create_directories(dir, ec);
         stagingPath = dir.string();
-        return true;
+        return !ec;
     } catch (...) { return false; }
 }
 
@@ -1266,11 +1283,20 @@ void CbsManager::appendToErrorLog(const std::string& logEntry) {
     std::lock_guard<std::mutex> lock(errorLogMutex);
     errorLog.append(logEntry).append("\n");
     if (logFilePath && !logFilePath->empty()) {
-        try { std::ofstream f(*logFilePath, std::ios::app | std::ios::binary); if (f.is_open()) f << logEntry << "\n"; } catch (...) {}
+        try {
+            RotateLogIfNeeded(*logFilePath);
+            std::ofstream f(*logFilePath, std::ios::app | std::ios::binary); if (f.is_open()) f << logEntry << "\n";
+        } catch (...) {}
     }
 }
 
-std::string CbsManager::toAbsolutePath(const std::string& path) { try { return fs::absolute(fs::path(path)).string(); } catch (...) { return path; } }
+std::string CbsManager::toAbsolutePath(const std::string& path) {
+    try {
+        return fs::absolute(fs::path(path)).string();
+    } catch (...) {
+        return path;
+    }
+}
 
 bool CbsManager::notifyTrustedInstaller(const std::vector<std::string>& operations) { UNREFERENCED_PARAMETER(operations); return true; }
 
