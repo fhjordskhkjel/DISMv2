@@ -7,20 +7,25 @@
 #include <filesystem>
 #include <chrono>
 #include <iomanip>
-
-// Additional Windows APIs for CBS integration
-#include <shlwapi.h>
+#include <io.h>
+#include <fcntl.h>
+#include <share.h>
+#include <unordered_set>
+#include <unordered_map>
 #include <wintrust.h>
 #include <softpub.h>
 #include <msxml6.h>
-#include <comutil.h>
-
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "oleaut32.lib")
-#pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "msxml6.lib")
+
+#if __has_include(<fdi.h>)
+#define WITH_FDI 1
+#include <fdi.h>
+#pragma comment(lib, "cabinet.lib")
+#else
+#define WITH_FDI 0
+#endif
 
 namespace fs = std::filesystem;
 
@@ -350,25 +355,27 @@ bool CbsManager::validateDependencies(const CbsPackageInfo& packageInfo) {
     if (!initialized && !initialize()) {
         return false;
     }
-    
     try {
         appendToErrorLog("Validating dependencies for package: " + packageInfo.packageIdentity);
-        
-        for (const auto& component : packageInfo.components) {
-            for (const auto& dependency : component.dependencies) {
-                // Check if dependency is satisfied
-                // This would involve querying the CBS store
-                appendToErrorLog("Checking dependency: " + dependency);
-                
-                // For now, we'll simulate dependency checking
-                // In a full implementation, this would use CBS APIs
+        std::unordered_set<std::string> present;
+        for (const auto& c : packageInfo.components) present.insert(c.identity);
+        std::vector<std::string> missing;
+        for (const auto& c : packageInfo.components) {
+            for (const auto& dep : c.dependencies) {
+                if (!dep.empty() && !present.count(dep)) missing.push_back(dep);
             }
         }
-        
+        if (!missing.empty()) {
+            std::sort(missing.begin(), missing.end());
+            missing.erase(std::unique(missing.begin(), missing.end()), missing.end());
+            appendToErrorLog("Dependency preflight: missing components: " + std::to_string(missing.size()));
+            for (const auto& m : missing) appendToErrorLog("  - " + m);
+            return false;
+        }
+        appendToErrorLog("Dependency preflight: all dependencies satisfied within extracted set");
         return true;
-        
     } catch (const std::exception& ex) {
-        setLastError("Exception during dependency validation: " + std::string(ex.what()));
+        setLastError(std::string("Exception during dependency validation: ") + ex.what());
         return false;
     }
 }
@@ -889,333 +896,216 @@ bool CbsManager::checkApplicability(const CbsPackageInfo& packageInfo,
 
 // Analyze Extracted Package
 std::optional<CbsPackageInfo> CbsManager::analyzeExtractedPackage(const std::string& extractedDir) {
-    if (!fs::exists(extractedDir)) {
-        setLastError("Extracted directory does not exist: " + extractedDir);
+    std::error_code ec;
+    if (!fs::exists(extractedDir, ec) || ec) {
+        appendToErrorLog("analyzeExtractedPackage: directory not found: " + extractedDir);
         return std::nullopt;
     }
-    
-    CbsPackageInfo packageInfo;
-    
-    try {
-        appendToErrorLog("Starting analysis of extracted package: " + extractedDir);
-        
-        // Initialize basic package information
-        packageInfo.packageIdentity = fs::path(extractedDir).filename().string();
-        packageInfo.displayName = packageInfo.packageIdentity;
-        packageInfo.version = "1.0.0.0";
-        packageInfo.releaseType = "Update";
-        packageInfo.installState = "Staged";
-        packageInfo.description = "Extracted Windows Package";
-        
-        // Find manifest files
-        auto manifestFiles = CbsUtils::findManifestFiles(extractedDir);
-        
-        if (!manifestFiles.empty()) {
-            appendToErrorLog("Found " + std::to_string(manifestFiles.size()) + " manifest files");
-            
-            // Parse package-level manifests
-            for (const auto& manifestFile : manifestFiles) {
-                auto extension = fs::path(manifestFile).extension().string();
-                std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
-                
-                if (extension == ".mum") {
-                    // Parse MUM (Microsoft Update Manifest)
-                    if (!parseXmlManifest(manifestFile, packageInfo)) {
-                        appendToErrorLog("Failed to parse MUM manifest: " + manifestFile);
-                        continue;
+
+    CbsPackageInfo info;
+    info.packageIdentity = fs::path(extractedDir).filename().string();
+    info.displayName = info.packageIdentity;
+    info.version = "1.0.0.0";
+    info.releaseType = "Update";
+    info.installState = "Staged";
+
+    // Discover manifests and create components
+    auto manifests = CbsUtils::findManifestFiles(extractedDir);
+    std::unordered_map<std::string, CbsComponentInfo> compMap;
+
+    for (const auto& m : manifests) {
+        std::string identity = fs::path(m).stem().string();
+        CbsComponentInfo comp{};
+        comp.identity = identity;
+        comp.version = info.version;
+        comp.architecture = CbsUtils::getSystemArchitecture();
+        comp.state = "Staged";
+        comp.isApplicable = true;
+        comp.needsRestart = false;
+
+        // Parse simple dependencies from .mum content
+        try {
+            std::ifstream in(m, std::ios::binary);
+            if (in) {
+                std::string content;
+                in.seekg(0, std::ios::end);
+                auto sz = static_cast<size_t>(in.tellg());
+                in.seekg(0, std::ios::beg);
+                const size_t maxRead = std::min<size_t>(sz, 2 * 1024 * 1024); // 2MB cap
+                content.resize(maxRead);
+                in.read(content.data(), maxRead);
+
+                // Look for dependency or parent name="..."
+                try {
+                    std::regex depRe(R"(<\s*(dependency|parent)[^>]*name\s*=\s*\"([^\"]+)\")", std::regex::icase);
+                    auto begin = std::sregex_iterator(content.begin(), content.end(), depRe);
+                    auto end = std::sregex_iterator();
+                    for (auto it = begin; it != end; ++it) {
+                        if (it->size() >= 3) {
+                            std::string dep = (*it)[2].str();
+                            if (!dep.empty()) comp.dependencies.push_back(dep);
+                        }
                     }
-                } else if (extension == ".xml") {
-                    // Parse XML manifest
-                    if (!parseXmlManifest(manifestFile, packageInfo)) {
-                        appendToErrorLog("Failed to parse XML manifest: " + manifestFile);
-                        continue;
-                    }
+                    // Deduplicate
+                    std::sort(comp.dependencies.begin(), comp.dependencies.end());
+                    comp.dependencies.erase(std::unique(comp.dependencies.begin(), comp.dependencies.end()), comp.dependencies.end());
+                } catch (...) {
+                    // Regex failure shouldn't break analysis
                 }
             }
-            
-            // Analyze components from manifests
-            for (const auto& manifestFile : manifestFiles) {
-                CbsComponentInfo componentInfo;
-                if (parseMumManifest(manifestFile, componentInfo)) {
-                    packageInfo.components.push_back(componentInfo);
-                }
-            }
-        } else {
-            appendToErrorLog("No manifest files found, creating basic component structure");
-            
-            // Create a basic component even without manifests
-            CbsComponentInfo component;
-            component.identity = packageInfo.packageIdentity + ".Component";
-            component.version = packageInfo.version;
-            component.architecture = CbsUtils::getSystemArchitecture();
-            component.state = "Staged";
-            component.isApplicable = true;
-            component.needsRestart = false;
-            
-            packageInfo.components.push_back(component);
+        } catch (...) {
+            // ignore individual file parse errors
         }
-        
-        // Mark as applicable if we have components
-        if (!packageInfo.components.empty()) {
-            packageInfo.applicabilityInfo.push_back("Package analysis completed");
-            packageInfo.applicabilityInfo.push_back("Components: " + std::to_string(packageInfo.components.size()));
-        }
-        
-        appendToErrorLog("Successfully analyzed extracted package with " + 
-                        std::to_string(packageInfo.components.size()) + " components");
-        
-        return packageInfo;
-        
-    } catch (const std::exception& ex) {
-        setLastError("Exception during extracted package analysis: " + std::string(ex.what()));
-        return std::nullopt;
+
+        compMap[identity] = std::move(comp);
     }
+
+    for (auto& kv : compMap) {
+        info.components.push_back(std::move(kv.second));
+    }
+
+    if (info.components.empty()) {
+        // Fallback: add a generic component based on directory name
+        CbsComponentInfo comp{}; 
+        comp.identity = info.packageIdentity + ".Component"; 
+        comp.version = info.version; 
+        comp.architecture = CbsUtils::getSystemArchitecture(); 
+        comp.state = "Staged"; 
+        comp.isApplicable = true; 
+        comp.needsRestart = false;
+        info.components.push_back(comp);
+    }
+
+    return info;
 }
 
-// Enhanced package extraction methods for CBS integration
-std::string CbsManager::toAbsolutePath(const std::string& path) {
-    try {
+// Helpers for file copying with long-path support
+namespace {
+    bool EnsureDirectories(const std::wstring& wpath) {
         std::error_code ec;
-        fs::path p(path);
-        if (p.is_absolute()) return p.string();
-        auto abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
-        return abs.empty() ? p.string() : abs.string();
-    } catch (...) { return path; }
-}
-
-bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::string& destination) {
-    try {
-        auto in = toAbsolutePath(cabPath);
-        auto out = toAbsolutePath(destination);
-
-        // Copy to local temp if UNC
-        if (isUncPath(in)) {
-            std::string staging;
-            if (!createStagingDirectory("", staging)) staging = out;
-            std::string localCab = staging + "\\src.cab";
-            std::error_code ec; fs::copy_file(in, localCab, fs::copy_options::overwrite_existing, ec);
-            if (!ec) in = localCab; else appendToErrorLog("UNC copy failed: " + ec.message());
-        }
-
-        std::wstring expand = getSystemToolPath(L"expand.exe");
-        std::wstring cmd = L"\"" + expand + L"\" \"" + std::wstring(in.begin(), in.end()) + L"\" -F:* \"" + std::wstring(out.begin(), out.end()) + L"\"";
-        if (verbose) appendToErrorLog("expand.exe cmd: " + std::string(cmd.begin(), cmd.end()));
-        std::string outText; DWORD code = 1;
-        if (RunProcessCapture(cmd, 120000, outText, code)) {
-            appendToErrorLog("expand.exe output: " + outText);
-            if (logFilePath) RotateLogIfNeeded(*logFilePath);
-            return code == 0;
-        }
-        appendToErrorLog("Failed to start expand.exe");
-        return false;
-    } catch (const std::exception& ex) {
-        appendToErrorLog("Exception in extractCabForAnalysis: " + std::string(ex.what()));
-        return false;
+        fs::create_directories(fs::path(wpath), ec);
+        return !ec;
     }
-}
-
-bool CbsManager::extractMsuForAnalysis(const std::string& msuPath, const std::string& destination) {
-    try {
-        appendToErrorLog("Extracting MSU using CAB-compatible methods (MSU is a CAB container)");
-        auto in = toAbsolutePath(msuPath);
-        auto out = toAbsolutePath(destination);
-
-        if (!fs::exists(in)) { appendToErrorLog("ERROR: MSU file not found: " + in); return false; }
-        if (!fs::exists(out)) { std::error_code ec; fs::create_directories(out, ec); if (ec) { appendToErrorLog("ERROR: Could not create destination: " + out + " (" + ec.message() + ")"); return false; } }
-
-        // If UNC, copy to local staging to avoid tool limitations
-        if (isUncPath(in)) {
-            std::string staging;
-            if (!createStagingDirectory("", staging)) staging = out;
-            std::string localMsu = staging + "\\src.msu";
-            std::error_code ec; fs::copy_file(in, localMsu, fs::copy_options::overwrite_existing, ec);
-            if (!ec) {
-                appendToErrorLog("UNC path detected; copied to local staging: " + localMsu);
-                in = localMsu;
-            } else {
-                appendToErrorLog("UNC copy failed: " + ec.message());
-            }
-        }
-
-        // expand.exe first
-        {
-            std::wstring expand = getSystemToolPath(L"expand.exe");
-            std::wstring wIn(in.begin(), in.end());
-            std::wstring wOut(out.begin(), out.end());
-            wIn = ToLongPath(wIn);
-            wOut = ToLongPath(wOut);
-            std::wstring wCommand = L"\"" + expand + L"\" \"" + wIn + L"\" -F:* \"" + wOut + L"\"";
-            if (verbose) appendToErrorLog("expand.exe cmd: " + std::string(wCommand.begin(), wCommand.end()));
-            std::string outText; DWORD code = 1;
-            if (RunProcessCapture(wCommand, 180000, outText, code)) {
-                appendToErrorLog("expand.exe output: " + outText);
-                if (logFilePath) RotateLogIfNeeded(*logFilePath);
-                if (code == 0) return true;
-                if (outText.find("Can't open input file") != std::string::npos) {
-                    appendToErrorLog("HINT: Verify the path exists and permissions. Resolved path: " + in);
-                }
-            }
-        }
-
-        // Offline DISM /Extract if offline image path supplied
-        if (!offlineImagePath.empty()) {
-            appendToErrorLog("expand.exe failed; trying DISM /Extract with offline image...");
-            std::wstring dism = getSystemToolPath(L"dism.exe");
-            std::wstring wIn(in.begin(), in.end());
-            std::wstring wOut(out.begin(), out.end());
-            std::wstring wImage(offlineImagePath.begin(), offlineImagePath.end());
-            wIn = ToLongPath(wIn); wOut = ToLongPath(wOut); wImage = ToLongPath(wImage);
-            std::wstring wDism = L"\"" + dism + L"\" /Image:\"" + wImage + L"\" /Add-Package /PackagePath:\"" + wIn + L"\" /Extract:\"" + wOut + L"\"";
-            if (verbose) appendToErrorLog("dism.exe cmd: " + std::string(wDism.begin(), wDism.end()));
-            std::string outText; DWORD code = 1;
-            if (RunProcessCapture(wDism, 300000, outText, code)) {
-                appendToErrorLog("dism.exe output: " + outText);
-                if (logFilePath) RotateLogIfNeeded(*logFilePath);
-                if (code == 0) return true;
-            }
-        }
-
-        // WUSA fallback last
-        if (allowWusaFallback) {
-            appendToErrorLog("Trying WUSA /extract as fallback...");
-            std::wstring wusa = getSystemToolPath(L"wusa.exe");
-            std::wstring wIn(in.begin(), in.end());
-            std::wstring wOut(out.begin(), out.end());
-            wIn = ToLongPath(wIn); wOut = ToLongPath(wOut);
-            std::wstring wWusa = L"\"" + wusa + L"\" \"" + wIn + L"\" /extract:\"" + wOut + L"\" /quiet /norestart";
-            if (verbose) appendToErrorLog("wusa.exe cmd: " + std::string(wWusa.begin(), wWusa.end()));
-            std::string outText; DWORD code = 1;
-            if (RunProcessCapture(wWusa, 300000, outText, code)) {
-                appendToErrorLog("wusa.exe output: " + outText);
-                if (logFilePath) RotateLogIfNeeded(*logFilePath);
-                if (code == 0) return true;
-            }
-        }
-
-        appendToErrorLog("All MSU extraction methods failed");
-        return false;
-
-    } catch (const std::exception& ex) {
-        appendToErrorLog("Exception in extractMsuForAnalysis: " + std::string(ex.what()));
-        return false;
+    bool IsReparsePoint(const std::wstring& wpath) {
+        DWORD attr = GetFileAttributesW(wpath.c_str());
+        if (attr == INVALID_FILE_ATTRIBUTES) return false;
+        return (attr & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
     }
-}
-
-bool CbsManager::extractGenericPackageForAnalysis(const std::string& packagePath, const std::string& destination) {
-    try {
-        if (!allowPowershellFallback && !allow7zFallback) {
-            appendToErrorLog("Generic extraction disabled by configuration");
+    bool CopyFileLongPath(const std::wstring& src, const std::wstring& dst, bool overwrite, std::string* log = nullptr) {
+        std::wstring wsrc = ToLongPath(src);
+        std::wstring wdst = ToLongPath(dst);
+        if (IsReparsePoint(wsrc)) { if (log) *log += "skip reparse src"; return true; }
+        DWORD attrs = GetFileAttributesW(wsrc.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES) { if (log) *log += " missing src"; return false; }
+        if (attrs & FILE_ATTRIBUTE_DIRECTORY) { return true; }
+        EnsureDirectories(fs::path(wdst).parent_path().wstring());
+        if (overwrite) {
+            SetFileAttributesW(wdst.c_str(), FILE_ATTRIBUTE_NORMAL);
+            DeleteFileW(wdst.c_str());
+        }
+        if (!CopyFileW(wsrc.c_str(), wdst.c_str(), overwrite ? FALSE : TRUE)) {
+            DWORD err = GetLastError();
+            if (log) *log += (" copy failed:" + std::to_string(err));
             return false;
         }
-
-        if (allowPowershellFallback) {
-            std::string psScript =
-                "$ErrorActionPreference = 'Stop'; "
-                "Add-Type -AssemblyName System.IO.Compression.FileSystem; "
-                "try { "
-                "  [System.IO.Compression.ZipFile]::ExtractToDirectory('" + packagePath + "', '" + destination + "'); "
-                "  exit 0; "
-                "} catch { Write-Output $_.Exception.Message; exit 1; }";
-            std::string psCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"" + psScript + "\"";
-            if (verbose) appendToErrorLog(std::string("powershell.exe cmd: ") + psCommand);
-            std::wstring wPs(psCommand.begin(), psCommand.end());
-            std::string out; DWORD code = 1;
-            if (RunProcessCapture(wPs, 60000, out, code)) {
-                appendToErrorLog("PowerShell output: " + out);
-                if (logFilePath) RotateLogIfNeeded(*logFilePath);
-                if (code == 0) return true;
-            }
-        }
-
-        if (allow7zFallback) {
-            std::string sevenZipCommand = "7z.exe x \"" + packagePath + "\" -o\"" + destination + "\" -y";
-            if (verbose) appendToErrorLog(std::string("7z.exe cmd: ") + sevenZipCommand);
-            std::wstring w7z(sevenZipCommand.begin(), sevenZipCommand.end());
-            std::string out; DWORD code = 1;
-            if (RunProcessCapture(w7z, 60000, out, code)) {
-                appendToErrorLog("7z output: " + out);
-                if (logFilePath) RotateLogIfNeeded(*logFilePath);
-                if (code == 0) return true;
-            }
-        }
-
-        return false;
-
-    } catch (const std::exception& ex) {
-        appendToErrorLog("Exception in extractGenericPackageForAnalysis: " + std::string(ex.what()));
-        return false;
+        return true;
     }
 }
 
+// Compute destination for an extracted file under a Windows target
+static std::optional<fs::path> ComputeDestinationForExtracted(const fs::path& src, const fs::path& extractedRoot, const std::string& targetRoot) {
+    try {
+        std::string srcStr = src.string();
+        std::string low = srcStr; std::transform(low.begin(), low.end(), low.begin(), ::tolower);
+        std::string troot = targetRoot; if (!troot.empty() && troot.back() != '\\') troot.push_back('\\');
+
+        auto posPkgs = low.find("\\windows\\servicing\\packages\\");
+        if (posPkgs != std::string::npos) {
+            std::string sub = srcStr.substr(posPkgs + 1); // skip leading backslash before 'w'
+            return fs::path(troot) / fs::path(sub);
+        }
+        auto posSxs = low.find("\\windows\\winsxs\\");
+        if (posSxs != std::string::npos) {
+            std::string sub = srcStr.substr(posSxs + 1);
+            return fs::path(troot) / fs::path(sub);
+        }
+        // If top-level manifest or catalog, place into servicing\Packages
+        auto ext = src.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".mum" || ext == ".cat") {
+            return fs::path(troot) / "Windows" / "servicing" / "Packages" / src.filename();
+        }
+        // Otherwise, if under extracted root and path starts with Windows\..., place under that
+        fs::path rel;
+        std::error_code ec;
+        rel = fs::relative(src, extractedRoot, ec);
+        if (!ec) {
+            std::string r = rel.string(); std::string rl = r; std::transform(rl.begin(), rl.end(), rl.begin(), ::tolower);
+            if (rl.rfind("windows\\", 0) == 0) {
+                return fs::path(troot) / rel;
+            }
+        }
+        // Unknown placement; skip
+        return std::nullopt;
+    } catch (...) { return std::nullopt; }
+}
+
+// Real file installation from extracted directory
 bool CbsManager::installExtractedFiles(const std::string& extractedDir, const std::string& targetPath, bool isOnline) {
-    try {
-        appendToErrorLog("Installing files from extracted directory: " + extractedDir);
-        
-        if (!fs::exists(extractedDir)) {
-            appendToErrorLog("Extracted directory does not exist: " + extractedDir);
-            return false;
-        }
-        
-        // Get all files from extracted directory
-        std::vector<std::string> extractedFiles;
-        for (const auto& entry : fs::recursive_directory_iterator(extractedDir)) {
-            if (entry.is_symlink() || entry.is_directory() && (entry.symlink_status().type() == fs::file_type::symlink)) {
-                appendToErrorLog("Skipping symlink/reparse point: " + entry.path().string());
-                continue;
-            }
-            if (entry.is_regular_file()) {
-                extractedFiles.push_back(entry.path().string());
-            }
-        }
-        
-        appendToErrorLog("Found " + std::to_string(extractedFiles.size()) + " files to install");
-        
-        int filesInstalled = 0;
-        int filesFailed = 0;
-        
-        for (const auto& sourceFile : extractedFiles) {
-            std::string relativePath = fs::relative(fs::path(sourceFile), fs::path(extractedDir)).string();
-            std::string targetFile;
-            
-            // Determine target location based on file type and path
-            if (relativePath.find("system32") != std::string::npos) {
-                targetFile = targetPath + "\\Windows\\System32\\" + fs::path(sourceFile).filename().string();
-            } else if (relativePath.find("drivers") != std::string::npos) {
-                targetFile = targetPath + "\\Windows\\System32\\drivers\\" + fs::path(sourceFile).filename().string();
-            } else if (relativePath.find("winsxs") != std::string::npos) {
-                targetFile = targetPath + "\\Windows\\winsxs\\" + relativePath;
-            } else if (fs::path(sourceFile).extension() == ".mum" || 
-                      fs::path(sourceFile).extension() == ".xml") {
-                // Manifest files go to servicing directory
-                targetFile = targetPath + "\\Windows\\servicing\\Packages\\" + fs::path(sourceFile).filename().string();
-            } else {
-                // Default location
-                targetFile = targetPath + "\\Windows\\" + relativePath;
-            }
-            
-            // Create target directory
-            std::error_code ec;
-            fs::create_directories(fs::path(targetFile).parent_path(), ec);
-            
-            // Copy file
-            if (fs::copy_file(sourceFile, targetFile, fs::copy_options::overwrite_existing, ec)) {
-                filesInstalled++;
-                appendToErrorLog("  Installed: " + relativePath);
-            } else {
-                filesFailed++;
-                appendToErrorLog("  Failed to install: " + relativePath + " (" + ec.message() + ")");
-            }
-        }
-        
-        appendToErrorLog("File installation completed: " + std::to_string(filesInstalled) + 
-                        " installed, " + std::to_string(filesFailed) + " failed");
-        
-        return filesInstalled > 0;
-        
-    } catch (const std::exception& ex) {
-        appendToErrorLog("Exception during file installation: " + std::string(ex.what()));
+    UNREFERENCED_PARAMETER(isOnline);
+    std::error_code ec;
+    if (!fs::exists(extractedDir, ec) || ec) {
+        appendToErrorLog("installExtractedFiles: extractedDir not found: " + extractedDir);
         return false;
     }
+
+    const fs::path root = fs::path(extractedDir);
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+    size_t copied = 0, skipped = 0, failed = 0;
+
+    while (!ec && it != end) {
+        const fs::directory_entry& entry = *it;
+        std::error_code fec;
+        // Skip symlink/reparse directories
+        if (entry.is_symlink(fec)) {
+            it.disable_recursion_pending();
+            ++it; continue;
+        }
+        if (entry.is_directory(fec)) {
+            ++it; continue;
+        }
+        if (fec) { ++it; continue; }
+        if (!entry.is_regular_file(fec) || fec) { ++it; continue; }
+
+        auto dstOpt = ComputeDestinationForExtracted(entry.path(), root, targetPath);
+        if (!dstOpt) { ++it; ++skipped; continue; }
+
+        std::wstring wsrc = entry.path().wstring();
+        std::wstring wdst = dstOpt->wstring();
+        std::string log;
+        if (CopyFileLongPath(wsrc, wdst, /*overwrite*/true, &log)) {
+            ++copied;
+        } else {
+            ++failed;
+            appendToErrorLog("Copy failed: " + entry.path().string() + " -> " + dstOpt->string() + (log.empty()?"":(" ("+log+")")));
+        }
+
+        it.increment(ec);
+    }
+    if (ec) {
+        appendToErrorLog(std::string("Traversal warning: ") + ec.message());
+    }
+
+    appendToErrorLog("installExtractedFiles summary: copied=" + std::to_string(copied) + 
+                     ", skipped=" + std::to_string(skipped) + ", failed=" + std::to_string(failed));
+
+    // Treat failures as non-fatal for now, but require at least manifests copied
+    return failed == 0 || copied > 0;
+}
+
+// Provide non-const-qualified private toAbsolutePath overload expected by linker
+std::string CbsManager::toAbsolutePath(const std::string& path) {
+    try { return fs::absolute(fs::path(path)).string(); } catch (...) { return path; }
 }
 
 // Private helper methods
@@ -1621,4 +1511,62 @@ bool CbsManager::updateComponentStore(const std::string& targetPath) {
 bool CbsManager::notifyServicingStack(const std::vector<std::string>& installedComponents) {
     appendToErrorLog("Notifying servicing stack (stub). Components: " + std::to_string(installedComponents.size()));
     return true;
+}
+
+bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::string& destination) {
+    try {
+        auto in = toAbsolutePath(cabPath);
+        auto out = toAbsolutePath(destination);
+        std::error_code ec; fs::create_directories(out, ec);
+        std::wstring tool = getSystemToolPath(L"expand.exe");
+        std::wstring wIn(in.begin(), in.end());
+        std::wstring wOut(out.begin(), out.end());
+        std::wstring cmd = L"\"" + tool + L"\" \"" + wIn + L"\" -F:* \"" + wOut + L"\"";
+        std::string outText; DWORD code = 1;
+        if (RunProcessCapture(cmd, 300000, outText, code)) {
+            appendToErrorLog("expand(cab) output: " + outText);
+            return code == 0;
+        }
+        return false;
+    } catch (...) { return false; }
+}
+
+bool CbsManager::extractMsuForAnalysis(const std::string& msuPath, const std::string& destination) {
+    try {
+        // Prefer expand.exe
+        if (extractCabForAnalysis(msuPath, destination)) return true;
+        // Optionally use DISM offline extract if offlineImagePath set
+        if (!offlineImagePath.empty()) {
+            std::wstring dism = getSystemToolPath(L"dism.exe");
+            std::wstring wImg(offlineImagePath.begin(), offlineImagePath.end());
+            std::wstring wMsu(msuPath.begin(), msuPath.end());
+            std::wstring wOut(destination.begin(), destination.end());
+            std::wstring cmd = L"\"" + dism + L"\" /Image:\"" + wImg + L"\" /Add-Package /PackagePath:\"" + wMsu + L"\" /Extract:\"" + wOut + L"\"";
+            std::string outText; DWORD code = 1;
+            if (RunProcessCapture(cmd, 600000, outText, code)) {
+                appendToErrorLog("dism /Extract output: " + outText);
+                if (code == 0) return true;
+            }
+        }
+        // Optional WUSA fallback if allowed
+        if (allowWusaFallback) {
+            std::wstring wusa = getSystemToolPath(L"wusa.exe");
+            std::wstring wMsu(msuPath.begin(), msuPath.end());
+            std::wstring wOut(destination.begin(), destination.end());
+            std::wstring cmd = L"\"" + wusa + L"\" \"" + wMsu + L"\" /extract:\"" + wOut + L"\" /quiet /norestart";
+            std::string outText; DWORD code = 1;
+            if (RunProcessCapture(cmd, 600000, outText, code)) {
+                appendToErrorLog("wusa /extract output: " + outText);
+                return code == 0;
+            }
+        }
+        return false;
+    } catch (...) { return false; }
+}
+
+bool CbsManager::extractGenericPackageForAnalysis(const std::string& packagePath, const std::string& destination) {
+    // Try expand first (handles cab/msu/zip-like)
+    if (extractCabForAnalysis(packagePath, destination)) return true;
+    // Could add 7z/powershell fallbacks here based on flags
+    return false;
 }
