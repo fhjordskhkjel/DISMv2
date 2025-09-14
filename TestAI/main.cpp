@@ -9,6 +9,7 @@
 #include "PackageSupersedenceManagerSimple.h"
 #include "CbsManager.h"
 #include "PsfWimHandler.h"
+#include <windows.h>
 
 using namespace WindowsInstallationEnhancement::Simple;
 namespace fs = std::filesystem;
@@ -97,6 +98,22 @@ namespace {
             }
         }
         return 0;
+    }
+
+    // Compute drive root for current Windows (e.g., "C:\")
+    std::string getSystemDriveRoot() {
+        char winDir[MAX_PATH] = {};
+        UINT n = GetWindowsDirectoryA(winDir, MAX_PATH);
+        if (n == 0 || n >= MAX_PATH) return "C:\\";
+        // Extract drive like "C:" and ensure it ends with backslash
+        std::string drive;
+        if (winDir[0] && winDir[1] == ':') {
+            drive.assign(winDir, winDir + 2);
+        } else {
+            drive = "C:";
+        }
+        if (drive.back() != '\\') drive.push_back('\\');
+        return drive;
     }
 }
 
@@ -867,12 +884,15 @@ int main(int argc, char* argv[]) {
                     
                     // Perform CBS installation
                     std::cout << "=== Starting CBS-integrated installation ===\n";
-                    
+
+                    // Determine target root
+                    std::string targetRoot = onlineMode ? getSystemDriveRoot() : imagePath;
+
                     CbsInstallResult result;
                     if (useExtractedDir) {
-                        result = cbsManager.installExtractedPackageWithCbs(extractedDir, "C:", onlineMode);
+                        result = cbsManager.installExtractedPackageWithCbs(extractedDir, targetRoot, onlineMode);
                     } else {
-                        result = cbsManager.installPackageWithCbs(packagePath, "C:", onlineMode);
+                        result = cbsManager.installPackageWithCbs(packagePath, targetRoot, onlineMode);
                     }
                     
                     if (result.success) {

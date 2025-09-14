@@ -745,7 +745,10 @@ std::optional<CbsPackageInfo> CbsManager::analyzeExtractedPackage(const std::str
     return info;
 }
 
-// Helpers for file copying with long-path support
+// Clean up: ensure only one set of destination/catalog/install helpers exists.
+// BEGIN: single authoritative implementations remain below
+
+// Helpers for file copying with long-path support (authoritative)
 namespace {
     bool EnsureDirectories(const std::wstring& wpath) {
         std::error_code ec;
@@ -778,45 +781,71 @@ namespace {
     }
 }
 
-// Compute destination for an extracted file under a Windows target
+// Normalize target root path (authoritative)
+namespace {
+    fs::path NormalizeRootPath(const std::string& in, bool isOnline) {
+        try {
+            if (in.empty()) {
+                if (isOnline) {
+                    wchar_t winDir[MAX_PATH] = {}; GetWindowsDirectoryW(winDir, MAX_PATH);
+                    if (winDir[0] && winDir[1] == L':') {
+                        std::wstring drv; drv.assign(winDir, winDir + 2); drv.push_back(L'\\');
+                        return fs::path(drv);
+                    }
+                    return fs::path(L"C:\\");
+                }
+                return fs::path(L"C:\\");
+            }
+            fs::path p(in);
+            if (p.has_root_name() && !p.has_root_directory()) {
+                // e.g., "C:" -> "C:\"
+                std::string rn = p.root_name().string();
+                if (rn.size() == 2 && rn[1] == ':') rn.push_back('\\');
+                return fs::path(rn);
+            }
+            if (!p.has_root_name() && !p.has_root_directory()) {
+                std::error_code ec; p = fs::absolute(p, ec);
+            }
+            return p;
+        } catch (...) { return fs::path(L"C:\\"); }
+    }
+}
+
+// Compute destination for an extracted file under a Windows target (authoritative)
 static std::optional<fs::path> ComputeDestinationForExtracted(const fs::path& src, const fs::path& extractedRoot, const std::string& targetRoot) {
     try {
         std::string srcStr = src.string();
         std::string low = srcStr; std::transform(low.begin(), low.end(), low.begin(), ::tolower);
-        std::string troot = targetRoot; if (!troot.empty() && troot.back() != '\\') troot.push_back('\\');
-
+        fs::path troot = fs::path(targetRoot);
+        if (!troot.has_root_name() || (troot.has_root_name() && !troot.has_root_directory())) {
+            std::string tr = targetRoot; if (!tr.empty() && tr.back() != '\\') tr.push_back('\\'); troot = fs::path(tr);
+        }
         auto posPkgs = low.find("\\windows\\servicing\\packages\\");
         if (posPkgs != std::string::npos) {
-            std::string sub = srcStr.substr(posPkgs + 1); // skip leading backslash before 'w'
-            return fs::path(troot) / fs::path(sub);
+            std::string winTail = srcStr.substr(posPkgs); // starts with \\Windows\...
+            return troot / fs::path(winTail);
         }
         auto posSxs = low.find("\\windows\\winsxs\\");
         if (posSxs != std::string::npos) {
-            std::string sub = srcStr.substr(posSxs + 1);
-            return fs::path(troot) / fs::path(sub);
+            std::string winTail = srcStr.substr(posSxs);
+            return troot / fs::path(winTail);
         }
-        // If top-level manifest or catalog, place into servicing\Packages
-        auto ext = src.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        auto ext = src.extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext == ".mum" || ext == ".cat") {
-            return fs::path(troot) / "Windows" / "servicing" / "Packages" / src.filename();
+            return troot / "Windows" / "servicing" / "Packages" / src.filename();
         }
-        // Otherwise, if under extracted root and path starts with Windows\\..., place under that
-        fs::path rel;
-        std::error_code ec;
-        rel = fs::relative(src, extractedRoot, ec);
+        std::error_code ec; fs::path rel = fs::relative(src, extractedRoot, ec);
         if (!ec) {
             std::string r = rel.string(); std::string rl = r; std::transform(rl.begin(), rl.end(), rl.begin(), ::tolower);
             if (rl.rfind("windows\\", 0) == 0) {
-                return fs::path(troot) / rel;
+                return troot / rel;
             }
         }
-        // Unknown placement; skip
         return std::nullopt;
     } catch (...) { return std::nullopt; }
 }
 
-// Catalog verification and registration
+// Catalog verification and registration (authoritative)
 namespace {
     bool VerifySignatureWintrust(const std::wstring& file) {
         WINTRUST_FILE_INFO fileInfo{}; fileInfo.cbStruct = sizeof(fileInfo); fileInfo.pcwszFilePath = file.c_str();
@@ -839,9 +868,8 @@ namespace {
     }
 }
 
-// Real file installation from extracted directory (two-pass: manifests, then payload)
+// Real file installation from extracted directory (two-pass: manifests, then payload) (authoritative)
 bool CbsManager::installExtractedFiles(const std::string& extractedDir, const std::string& targetPath, bool isOnline) {
-    UNREFERENCED_PARAMETER(isOnline);
     std::error_code ec;
     if (!fs::exists(extractedDir, ec) || ec) {
         appendToErrorLog("installExtractedFiles: extractedDir not found: " + extractedDir);
@@ -849,14 +877,13 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
     }
 
     const fs::path root = fs::path(extractedDir);
-    const fs::path target = fs::path(targetPath);
+    const fs::path target = NormalizeRootPath(targetPath, isOnline);
 
     size_t copied = 0, skipped = 0, failed = 0;
 
     auto doCopy = [&](const fs::directory_entry& entry) {
-        auto dstOpt = ComputeDestinationForExtracted(entry.path(), root, targetPath);
+        auto dstOpt = ComputeDestinationForExtracted(entry.path(), root, target.string());
         if (!dstOpt) { ++skipped; return; }
-        // Path traversal hardening
         if (!IsUnderRootCaseInsensitive(*dstOpt, target)) { ++failed; appendToErrorLog("Path outside target root skipped: " + dstOpt->string()); return; }
         std::wstring wsrc = entry.path().wstring();
         std::wstring wdst = dstOpt->wstring();
@@ -869,7 +896,7 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         }
     };
 
-    // Pass 1: copy manifests (.mum) and catalogs (.cat)
+    // Pass 1: manifests and catalogs
     fs::recursive_directory_iterator it1(root, fs::directory_options::skip_permission_denied, ec), end;
     while (!ec && it1 != end) {
         const fs::directory_entry& entry = *it1;
@@ -878,14 +905,12 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         if (fec) { it1.increment(ec); continue; }
         if (!entry.is_regular_file(fec) || fec) { it1.increment(ec); continue; }
         auto ext = entry.path().extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext == ".mum" || ext == ".cat") {
-            doCopy(entry);
-        }
+        if (ext == ".mum" || ext == ".cat") { doCopy(entry); }
         it1.increment(ec);
     }
     if (ec) appendToErrorLog(std::string("Traversal warning (pass1): ") + ec.message());
 
-    // Verify and register catalogs present in target
+    // Verify/register catalogs in target
     try {
         fs::path catDir = target / "Windows" / "servicing" / "Packages";
         std::error_code cec; if (fs::exists(catDir, cec)) {
@@ -895,9 +920,11 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
                 if (ext == ".cat") {
                     std::wstring w = e.path().wstring();
                     bool ok = VerifySignatureWintrust(w);
-                    if (!ok) appendToErrorLog("Catalog signature verification failed: " + e.path().string());
-                    else appendToErrorLog("Catalog signature OK: " + e.path().string());
-                    if (!RegisterCatalog(w)) appendToErrorLog("Catalog registration failed: " + e.path().string());
+                    appendToErrorLog(std::string("Catalog signature ") + (ok?"OK: ":"FAILED: ") + e.path().string());
+                    if (!RegisterCatalog(w)) {
+                        DWORD le = GetLastError();
+                        appendToErrorLog(std::string("Catalog registration failed (") + std::to_string(le) + "): " + e.path().string());
+                    }
                 }
             }
         }
@@ -905,7 +932,7 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         appendToErrorLog("Catalog verification/registration encountered errors");
     }
 
-    // Pass 2: copy remaining payload
+    // Pass 2: payload
     ec.clear();
     fs::recursive_directory_iterator it2(root, fs::directory_options::skip_permission_denied, ec);
     while (!ec && it2 != end) {
@@ -921,11 +948,12 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
     }
     if (ec) appendToErrorLog(std::string("Traversal warning (pass2): ") + ec.message());
 
-    appendToErrorLog("installExtractedFiles summary: copied=" + std::to_string(copied) + 
-                     ", skipped=" + std::to_string(skipped) + ", failed=" + std::to_string(failed));
+    appendToErrorLog("installExtractedFiles summary: copied=" + std::to_string(copied) + ", skipped=" + std::to_string(skipped) + ", failed=" + std::to_string(failed));
 
     return failed == 0 || copied > 0;
 }
+
+// END: authoritative implementations
 
 // Extraction helpers
 bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::string& destination) {
@@ -1258,18 +1286,32 @@ CbsInstallResult CbsManager::installExtractedPackageWithCbs(const std::string& e
     if (!initialized && !initialize()) {
         result.errorDescription = "CBS Manager not initialized"; result.errorCode = E_FAIL; return result;
     }
+    // Pre-expand any inner CABs to surface manifests/payload
+    try {
+        appendToErrorLog("Pre-expanding any CABs found in extracted directory...");
+        ExpandAllCabsInDir(this, extractedDir);
+    } catch (...) {}
+
     auto pkg = analyzeExtractedPackage(extractedDir);
     if (!pkg) { result.errorDescription = "Failed to analyze extracted package"; result.errorCode = E_FAIL; return result; }
     if (!validateDependencies(*pkg)) { result.errorDescription = "Dependency validation failed"; result.errorCode = E_FAIL; return result; }
     if (!beginTransaction()) { result.errorDescription = "Failed to begin CBS transaction"; result.errorCode = E_FAIL; return result; }
+
     // Manifests first then payload
     auto manifests = CbsUtils::findManifestFiles(extractedDir);
     if (!processManifestFiles(manifests, targetPath)) {
         rollbackTransaction(); result.errorDescription = "Failed to process manifests"; result.errorCode = E_FAIL; return result;
     }
+
+    // Try payload install; if nothing copied, attempt a second pass after expanding cabs (if any remained)
     if (!installExtractedFiles(extractedDir, targetPath, isOnline)) {
-        rollbackTransaction(); result.errorDescription = "Failed to install payload"; result.errorCode = E_FAIL; return result;
+        appendToErrorLog("First payload install attempt reported no files; retrying after ensuring CAB expansion...");
+        try { ExpandAllCabsInDir(this, extractedDir); } catch (...) {}
+        if (!installExtractedFiles(extractedDir, targetPath, isOnline)) {
+            rollbackTransaction(); result.errorDescription = "Failed to install payload"; result.errorCode = E_FAIL; return result;
+        }
     }
+
     for (const auto& comp : pkg->components) {
         if (!registerComponents({comp})) result.failedComponents.push_back(comp.identity); else result.installedComponents.push_back(comp.identity);
     }
