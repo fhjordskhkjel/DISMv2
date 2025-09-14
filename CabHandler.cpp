@@ -50,8 +50,6 @@ void CabHandler::setLastErrorFmt(const std::string& fmt, Args&&... args) {
 
 // Enhanced CAB extraction with improved signature detection and fallback methods
 bool CabHandler::extractCabImpl(const std::string& cabPath, const std::string& destination) {
-    // Add distinctive debug message to confirm this version is running
-    std::cout << "DEBUG: FIXED extractCabImpl version is running!\n";
     
     // Check if CAB file exists using modern filesystem
     if (!fs::exists(cabPath)) {

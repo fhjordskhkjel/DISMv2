@@ -70,8 +70,28 @@ namespace {
             std::string arg = argv[i];
             if (arg == "--temp-dir" && i + 1 < argc) {
                 g_opts.tempDir = argv[++i];
+                // Validate temp directory path
+                if (g_opts.tempDir.empty()) {
+                    std::cerr << "Error: Empty temp directory path provided\n";
+                    return 1;
+                }
             } else if (arg == "--log" && i + 1 < argc) {
                 g_opts.logPath = argv[++i];
+                // Validate log file path
+                if (g_opts.logPath.empty()) {
+                    std::cerr << "Error: Empty log file path provided\n";
+                    return 1;
+                }
+                // Check if parent directory exists for log file
+                try {
+                    fs::path logPath(g_opts.logPath);
+                    fs::path parentDir = logPath.parent_path();
+                    if (!parentDir.empty() && !fs::exists(parentDir)) {
+                        std::cerr << "Warning: Log file parent directory does not exist: " << parentDir << "\n";
+                    }
+                } catch (const std::exception& ex) {
+                    std::cerr << "Warning: Could not validate log path: " << ex.what() << "\n";
+                }
             } else if (arg == "--verbose") {
                 g_opts.verbose = true;
             }
@@ -304,15 +324,32 @@ void demoGovernmentMode() {
 }
 
 int main(int argc, char* argv[]) {
+    // Input validation
     if (argc < 2) {
         printUsage();
         return 1;
     }
 
+    // Validate argv array
+    if (!argv || !argv[0] || !argv[1]) {
+        std::cerr << "Error: Invalid command line arguments\n";
+        return 1;
+    }
+
     // Parse global options (after command we parse again per-command if needed)
-    parseGlobalOptions(argc, argv, 2);
+    int parseResult = parseGlobalOptions(argc, argv, 2);
+    if (parseResult != 0) {
+        return parseResult;
+    }
     
     std::string command = argv[1];
+    
+    // Validate command is not empty
+    if (command.empty()) {
+        std::cerr << "Error: Empty command provided\n";
+        printUsage();
+        return 1;
+    }
     
     try {
         // Package Supersedence and Intelligence Commands

@@ -38,20 +38,25 @@ CabHandler::~CabHandler() = default;
 // Simple error handling implementation
 void CabHandler::setLastError(const std::string& error) {
     lastError = error;
-    std::cerr << "Error: " << error << std::endl;
+    SimpleLogger::error(error);
 }
 
 template<typename... Args>
 void CabHandler::setLastErrorFmt(const std::string& fmt, Args&&... args) {
-    // Simplified version without std::format for compatibility
-    lastError = fmt;
-    std::cerr << "Error: " << fmt << std::endl;
+    try {
+        // TODO: Replace with std::format when C++20 is fully available
+        // For now, just use the format string as-is for compatibility
+        lastError = fmt;
+        SimpleLogger::error(fmt);
+    } catch (const std::exception& ex) {
+        // Fallback error handling if formatting fails
+        lastError = "Error formatting failed: " + std::string(ex.what());
+        SimpleLogger::error(lastError);
+    }
 }
 
 // Enhanced CAB extraction with improved signature detection and fallback methods
 bool CabHandler::extractCabImpl(const std::string& cabPath, const std::string& destination) {
-    // Add distinctive debug message to confirm this version is running
-    std::cout << "DEBUG: FINAL FIXED extractCabImpl version is running!\n";
     
     // Check if CAB file exists using modern filesystem
     if (!fs::exists(cabPath)) {
@@ -65,40 +70,50 @@ bool CabHandler::extractCabImpl(const std::string& cabPath, const std::string& d
         return false;
     }
 
-    std::cout << "Extracting CAB: " << cabPath << "\n";
-    std::cout << "Destination: " << destination << "\n";
+    SimpleLogger::info("Extracting CAB: " + cabPath);
+    SimpleLogger::info("Destination: " + destination);
 
-    // Enhanced file signature checking
-    std::ifstream cabFile(cabPath, std::ios::binary);
-    if (!cabFile.is_open()) {
-        setLastError("Cannot open CAB file for reading: " + cabPath);
-        return false;
-    }
-    
-    // Read and analyze file signature
-    char signature[8];
-    cabFile.read(signature, 8);
-    cabFile.close();
-    
-    bool isStandardCab = (memcmp(signature, "MSCF", 4) == 0);
+    // Enhanced file signature checking with RAII
+    char signature[FileSignatures::SIGNATURE_SIZE] = {0}; // Initialize to zero
+    bool isStandardCab = false;
     bool isPossibleArchive = false;
     
+    {
+        std::ifstream cabFile(cabPath, std::ios::binary);
+        if (!cabFile.is_open()) {
+            setLastError("Cannot open CAB file for reading: " + cabPath);
+            return false;
+        }
+        
+        // Read and analyze file signature
+        cabFile.read(signature, FileSignatures::SIGNATURE_SIZE);
+        
+        if (!cabFile.good() && !cabFile.eof()) {
+            setLastError("Failed to read signature from CAB file: " + cabPath);
+            return false;
+        }
+        
+        // File is automatically closed when cabFile goes out of scope
+    }
+    
+    isStandardCab = (memcmp(signature, FileSignatures::CAB_SIGNATURE, FileSignatures::CAB_SIGNATURE_SIZE) == 0);
+    
     // Check for various archive signatures
-    if (memcmp(signature, "PK", 2) == 0) {
+    if (memcmp(signature, FileSignatures::ZIP_SIGNATURE, FileSignatures::ZIP_SIGNATURE_SIZE) == 0) {
         isPossibleArchive = true; // ZIP-based format
-        std::cout << "Detected ZIP-based archive format\n";
-    } else if (memcmp(signature, "7z", 2) == 0) {
+        SimpleLogger::info("Detected ZIP-based archive format");
+    } else if (memcmp(signature, FileSignatures::SEVENZ_SIGNATURE, FileSignatures::SEVENZ_SIGNATURE_SIZE) == 0) {
         isPossibleArchive = true; // 7-Zip format
-        std::cout << "Detected 7-Zip archive format\n";
-    } else if (memcmp(signature, "\x1F\x8B", 2) == 0) {
+        SimpleLogger::info("Detected 7-Zip archive format");
+    } else if (memcmp(signature, FileSignatures::GZIP_SIGNATURE, FileSignatures::GZIP_SIGNATURE_SIZE) == 0) {
         isPossibleArchive = true; // GZIP format
-        std::cout << "Detected GZIP archive format\n";
+        SimpleLogger::info("Detected GZIP archive format");
     }
     
     if (!isStandardCab) {
-        std::cout << "Warning: Non-standard CAB signature detected\n";
+        SimpleLogger::warning("Non-standard CAB signature detected");
         std::cout << "Signature bytes: ";
-        for (int i = 0; i < 8; i++) {
+        for (size_t i = 0; i < FileSignatures::SIGNATURE_SIZE; i++) {
             std::cout << std::hex << std::setw(2) << std::setfill('0') 
                      << (unsigned char)signature[i] << " ";
         }
