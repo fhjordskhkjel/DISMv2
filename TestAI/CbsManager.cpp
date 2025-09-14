@@ -17,6 +17,8 @@
 #include <wincrypt.h>
 #include <msxml6.h>
 #include <mscat.h>
+#include "CabHandler.h"
+#include "PsfWimHandler.h"
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "msxml6.lib")
@@ -847,9 +849,29 @@ static std::optional<fs::path> ComputeDestinationForExtracted(const fs::path& sr
         std::error_code ec; fs::path rel = fs::relative(src, extractedRoot, ec);
         if (!ec) {
             std::string r = rel.string(); std::string rl = r; std::transform(rl.begin(), rl.end(), rl.begin(), ::tolower);
+            // If path already starts with Windows\..., map directly under target
             if (rl.rfind("windows\\", 0) == 0) {
                 return troot / rel;
             }
+            // Additional well-known roots mapping
+            auto mapUnder = [&](const std::string& prefix, const fs::path& under) -> std::optional<fs::path> {
+                if (rl.rfind(prefix, 0) == 0) {
+                    std::string tail = r.substr(prefix.size());
+                    fs::path tailPath(tail);
+                    return troot / under / tailPath;
+                }
+                return std::nullopt;
+            };
+            // Top-level mappings (when source doesn't include Windows prefix)
+            if (auto p = mapUnder("servicing\\lcu\\", fs::path("Windows")/"servicing"/"LCU")) return p;
+            if (auto p = mapUnder("system32\\drivers\\", fs::path("Windows")/"System32"/"drivers")) return p;
+            if (auto p = mapUnder("drivers\\", fs::path("Windows")/"System32"/"drivers")) return p;
+            if (auto p = mapUnder("fonts\\", fs::path("Windows")/"Fonts")) return p;
+            if (auto p = mapUnder("inf\\", fs::path("Windows")/"INF")) return p;
+            if (auto p = mapUnder("policydefinitions\\", fs::path("Windows")/"PolicyDefinitions")) return p;
+            if (auto p = mapUnder("boot\\", fs::path("Windows")/"Boot")) return p;
+            if (auto p = mapUnder("recovery\\", fs::path("Windows")/"System32"/"Recovery")) return p;
+            if (auto p = mapUnder("syswow64\\", fs::path("Windows")/"SysWOW64")) return p;
         }
         return std::nullopt;
     } catch (...) { return std::nullopt; }
@@ -912,6 +934,7 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
 
     size_t copied = 0, skipped = 0, failed = 0;
     std::vector<fs::path> copiedCatalogTargets;
+    std::vector<fs::path> specialComponents; // .appx/.msix/.psf/.wim/.esd
 
     // Pass 1: manifests and catalogs
     fs::recursive_directory_iterator it1(root, fs::directory_options::skip_permission_denied, ec), end;
@@ -976,6 +999,11 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         if (!entry.is_regular_file(fec) || fec) { it2.increment(ec); continue; }
         auto ext = entry.path().extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext == ".mum" || ext == ".cat") { it2.increment(ec); continue; }
+        // Collect special PSF/APPX/MSIX and WIM/ESD for separate handling
+        if (ext == ".appx" || ext == ".msix" || ext == ".psf" || ext == ".wim" || ext == ".esd") {
+            specialComponents.push_back(entry.path());
+            it2.increment(ec); continue;
+        }
         auto dstOpt = ComputeDestinationForExtracted(entry.path(), root, target.string());
         if (!dstOpt) { ++skipped; it2.increment(ec); continue; }
         if (!IsUnderRootCaseInsensitive(*dstOpt, target)) { ++failed; appendToErrorLog("Path outside target root skipped: " + dstOpt->string()); it2.increment(ec); continue; }
@@ -997,12 +1025,57 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
     }
     if (ec) appendToErrorLog(std::string("Traversal warning (pass2): ") + ec.message());
 
+    // Process PSF/APPX/MSIX and WIM/ESD components using PsfWimHandler
+    if (!specialComponents.empty()) {
+        try {
+            PsfWimHandler handler;
+            if (handler.initialize()) {
+                // Create a staging directory for extracted PSF content
+                std::string psfStage;
+                if (!createStagingDirectory("", psfStage)) psfStage = (target / "Windows" / "Temp" / "dismv2_psf").string();
+
+                for (const auto& comp : specialComponents) {
+                    std::string p = comp.string();
+                    auto ext = comp.extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (ext == ".appx" || ext == ".msix" || ext == ".psf") {
+                        std::string out = (fs::path(psfStage) / comp.stem()).string();
+                        std::error_code dec; fs::create_directories(out, dec);
+                        if (handler.extractPsfPackage(p, out)) {
+                            appendToErrorLog(std::string("[PSF] Extracted: ") + p + " -> " + out);
+                        } else {
+                            appendToErrorLog(std::string("[PSF] Extraction failed: ") + p + ": " + handler.getLastError());
+                        }
+                    } else if (ext == ".wim" || ext == ".esd") {
+                        std::vector<WimImageInfo> images;
+                        if (handler.listWimImages(p, images)) {
+                            appendToErrorLog(std::string("[WIM] ") + p + ": images=" + std::to_string(images.size()));
+                        }
+                        // Attempt copy to mapped destination as well (e.g., Recovery)
+                        auto dstOpt = ComputeDestinationForExtracted(comp, root, target.string());
+                        if (dstOpt && IsUnderRootCaseInsensitive(*dstOpt, target)) {
+                            std::string log; if (CopyFileLongPath(comp.wstring(), dstOpt->wstring(), true, &log)) {
+                                ++copied;
+                                appendToErrorLog(std::string("[WIM] Installed: ") + comp.string() + " -> " + dstOpt->string());
+                            } else {
+                                ++failed; appendToErrorLog(std::string("[WIM] Copy failed: ") + comp.string() + " -> " + dstOpt->string() + (log.empty()?"":(" ("+log+")")));
+                            }
+                        } else {
+                            ++skipped;
+                        }
+                    }
+                }
+            } else {
+                appendToErrorLog("PsfWimHandler initialization failed; special components skipped");
+            }
+        } catch (...) {
+            appendToErrorLog("PSF/WIM processing encountered errors");
+        }
+    }
+
     appendToErrorLog("installExtractedFiles summary: copied=" + std::to_string(copied) + ", skipped=" + std::to_string(skipped) + ", failed=" + std::to_string(failed));
 
     return failed == 0 || copied > 0;
 }
-
-// END: authoritative implementations
 
 // Extraction helpers
 bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::string& destination) {
