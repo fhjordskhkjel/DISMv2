@@ -204,6 +204,16 @@ namespace {
             return sep == L'\\' || sep == L'/';
         } catch (...) { return false; }
     }
+
+    // Check if current process is elevated (admin) - note: not equivalent to TrustedInstaller rights
+    bool IsProcessElevated() {
+        HANDLE hToken = NULL;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) return false;
+        TOKEN_ELEVATION elev{}; DWORD cb = sizeof(elev);
+        BOOL ok = GetTokenInformation(hToken, TokenElevation, &elev, sizeof(elev), &cb);
+        CloseHandle(hToken);
+        return ok && elev.TokenIsElevated != 0;
+    }
 }
 
 std::wstring CbsManager::getSystemToolPath(const wchar_t* toolName) {
@@ -879,22 +889,29 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
     const fs::path root = fs::path(extractedDir);
     const fs::path target = NormalizeRootPath(targetPath, isOnline);
 
-    size_t copied = 0, skipped = 0, failed = 0;
-
-    auto doCopy = [&](const fs::directory_entry& entry) {
-        auto dstOpt = ComputeDestinationForExtracted(entry.path(), root, target.string());
-        if (!dstOpt) { ++skipped; return; }
-        if (!IsUnderRootCaseInsensitive(*dstOpt, target)) { ++failed; appendToErrorLog("Path outside target root skipped: " + dstOpt->string()); return; }
-        std::wstring wsrc = entry.path().wstring();
-        std::wstring wdst = dstOpt->wstring();
-        std::string log;
-        if (CopyFileLongPath(wsrc, wdst, /*overwrite*/true, &log)) {
-            ++copied;
-        } else {
-            ++failed;
-            appendToErrorLog("Copy failed: " + entry.path().string() + " -> " + dstOpt->string() + (log.empty()?"":(" ("+log+")")));
+    // Early permission sanity check for ONLINE installs: writing to Windows\servicing\Packages requires TrustedInstaller
+    if (isOnline) {
+        try {
+            fs::path testDir = target / "Windows" / "servicing" / "Packages";
+            fs::create_directories(testDir, ec); ec.clear();
+            fs::path testFile = testDir / "__dismv2_write_test.tmp";
+            std::wstring wTest = ToLongPath(testFile.wstring());
+            HANDLE h = CreateFileW(wTest.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+            if (h == INVALID_HANDLE_VALUE) {
+                DWORD le = GetLastError();
+                appendToErrorLog("Access check: unable to write to target system directories (error=" + std::to_string(le) + ")");
+                appendToErrorLog("Online installation requires elevated TrustedInstaller permissions. Run as Administrator/TrustedInstaller, or use /Offline with /Image:<path>.");
+                return false;
+            }
+            CloseHandle(h);
+        } catch (...) {
+            appendToErrorLog("Access check: unexpected error verifying write access to target.");
+            return false;
         }
-    };
+    }
+
+    size_t copied = 0, skipped = 0, failed = 0;
+    std::vector<fs::path> copiedCatalogTargets;
 
     // Pass 1: manifests and catalogs
     fs::recursive_directory_iterator it1(root, fs::directory_options::skip_permission_denied, ec), end;
@@ -905,27 +922,39 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         if (fec) { it1.increment(ec); continue; }
         if (!entry.is_regular_file(fec) || fec) { it1.increment(ec); continue; }
         auto ext = entry.path().extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext == ".mum" || ext == ".cat") { doCopy(entry); }
+        if (ext == ".mum" || ext == ".cat") {
+            auto dstOpt = ComputeDestinationForExtracted(entry.path(), root, target.string());
+            if (!dstOpt) { ++skipped; it1.increment(ec); continue; }
+            if (!IsUnderRootCaseInsensitive(*dstOpt, target)) { ++failed; appendToErrorLog("Path outside target root skipped: " + dstOpt->string()); it1.increment(ec); continue; }
+            std::wstring wsrc = entry.path().wstring();
+            std::wstring wdst = dstOpt->wstring();
+            std::string log;
+            if (CopyFileLongPath(wsrc, wdst, /*overwrite*/true, &log)) {
+                ++copied;
+                if (ext == ".cat") copiedCatalogTargets.push_back(*dstOpt);
+            } else {
+                ++failed;
+                DWORD le = GetLastError();
+                if (le == ERROR_ACCESS_DENIED) {
+                    appendToErrorLog("Copy failed (ACCESS DENIED): " + entry.path().string() + " -> " + dstOpt->string() + ". Run elevated or use /Offline /Image.");
+                } else {
+                    appendToErrorLog("Copy failed: " + entry.path().string() + " -> " + dstOpt->string() + (log.empty()?"":(" ("+log+")")));
+                }
+            }
+        }
         it1.increment(ec);
     }
     if (ec) appendToErrorLog(std::string("Traversal warning (pass1): ") + ec.message());
 
-    // Verify/register catalogs in target
+    // Verify/register only catalogs we just copied
     try {
-        fs::path catDir = target / "Windows" / "servicing" / "Packages";
-        std::error_code cec; if (fs::exists(catDir, cec)) {
-            for (auto& e : fs::directory_iterator(catDir, cec)) {
-                if (!e.is_regular_file()) continue;
-                auto ext = e.path().extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (ext == ".cat") {
-                    std::wstring w = e.path().wstring();
-                    bool ok = VerifySignatureWintrust(w);
-                    appendToErrorLog(std::string("Catalog signature ") + (ok?"OK: ":"FAILED: ") + e.path().string());
-                    if (!RegisterCatalog(w)) {
-                        DWORD le = GetLastError();
-                        appendToErrorLog(std::string("Catalog registration failed (") + std::to_string(le) + "): " + e.path().string());
-                    }
-                }
+        for (const auto& catTarget : copiedCatalogTargets) {
+            std::wstring w = catTarget.wstring();
+            bool ok = VerifySignatureWintrust(w);
+            appendToErrorLog(std::string("Catalog signature ") + (ok?"OK: ":"FAILED: ") + catTarget.string());
+            if (!RegisterCatalog(w)) {
+                DWORD le = GetLastError();
+                appendToErrorLog(std::string("Catalog registration failed (") + std::to_string(le) + "): " + catTarget.string());
             }
         }
     } catch (...) {
@@ -943,7 +972,23 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         if (!entry.is_regular_file(fec) || fec) { it2.increment(ec); continue; }
         auto ext = entry.path().extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext == ".mum" || ext == ".cat") { it2.increment(ec); continue; }
-        doCopy(entry);
+        auto dstOpt = ComputeDestinationForExtracted(entry.path(), root, target.string());
+        if (!dstOpt) { ++skipped; it2.increment(ec); continue; }
+        if (!IsUnderRootCaseInsensitive(*dstOpt, target)) { ++failed; appendToErrorLog("Path outside target root skipped: " + dstOpt->string()); it2.increment(ec); continue; }
+        std::wstring wsrc = entry.path().wstring();
+        std::wstring wdst = dstOpt->wstring();
+        std::string log;
+        if (CopyFileLongPath(wsrc, wdst, /*overwrite*/true, &log)) {
+            ++copied;
+        } else {
+            ++failed;
+            DWORD le = GetLastError();
+            if (le == ERROR_ACCESS_DENIED) {
+                appendToErrorLog("Copy failed (ACCESS DENIED): " + entry.path().string() + " -> " + dstOpt->string() + ". Run elevated or use /Offline /Image.");
+            } else {
+                appendToErrorLog("Copy failed: " + entry.path().string() + " -> " + dstOpt->string() + (log.empty()?"":(" ("+log+")")));
+            }
+        }
         it2.increment(ec);
     }
     if (ec) appendToErrorLog(std::string("Traversal warning (pass2): ") + ec.message());
@@ -960,10 +1005,33 @@ bool CbsManager::extractCabForAnalysis(const std::string& cabPath, const std::st
     try {
         auto in = toAbsolutePath(cabPath);
         auto out = toAbsolutePath(destination);
+
+        // If attempting to expand a CAB into its own directory, redirect output to a subfolder
+        try {
+            std::error_code ec;
+            fs::path inPath = fs::path(in);
+            fs::path outPath = fs::path(out);
+            fs::path inParent = inPath.parent_path();
+            fs::path canonInParent = fs::weakly_canonical(inParent, ec); ec.clear();
+            fs::path canonOut = fs::weakly_canonical(outPath, ec); ec.clear();
+            bool sameDir = false;
+            if (!canonInParent.empty() && !canonOut.empty()) {
+                sameDir = fs::equivalent(canonInParent, canonOut, ec);
+                ec.clear();
+            }
+            if (sameDir) {
+                std::string sub = std::string("_cab_") + inPath.stem().string();
+                outPath = outPath / sub;
+                out = outPath.string();
+            }
+        } catch (...) {
+            // Best-effort; if comparison fails, continue with provided destination
+        }
+
         std::error_code ec; fs::create_directories(out, ec);
         std::wstring tool = getSystemToolPath(L"expand.exe");
-        std::wstring wIn(in.begin(), in.end());
-        std::wstring wOut(out.begin(), out.end());
+        std::wstring wIn = ToLongPath(std::wstring(in.begin(), in.end()));
+        std::wstring wOut = ToLongPath(std::wstring(out.begin(), out.end()));
         std::wstring cmd = L"\"" + tool + L"\" \"" + wIn + L"\" -F:* \"" + wOut + L"\"";
         std::string outText; DWORD code = 1;
         if (RunProcessCapture(cmd, 300000, outText, code)) {
