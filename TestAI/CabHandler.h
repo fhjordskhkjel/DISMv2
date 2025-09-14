@@ -10,6 +10,49 @@
 #include <fdi.h>
 #include <windows.h>
 
+// File signature constants
+namespace FileSignatures {
+    constexpr char CAB_SIGNATURE[] = "MSCF";
+    constexpr char ZIP_SIGNATURE[] = "PK";  
+    constexpr char SEVENZ_SIGNATURE[] = "7z";
+    constexpr char GZIP_SIGNATURE[] = "\x1F\x8B";
+    constexpr size_t SIGNATURE_SIZE = 8;
+    constexpr size_t CAB_SIGNATURE_SIZE = 4;
+    constexpr size_t ZIP_SIGNATURE_SIZE = 2;
+    constexpr size_t SEVENZ_SIGNATURE_SIZE = 2;
+    constexpr size_t GZIP_SIGNATURE_SIZE = 2;
+}
+
+// Simple logging utilities
+namespace LogLevel {
+    enum Level { INFO, WARNING, ERROR, DEBUG };
+}
+
+class SimpleLogger {
+public:
+    static void log(LogLevel::Level level, const std::string& message) {
+        const char* levelStr = getLevelString(level);
+        auto stream = (level == LogLevel::ERROR) ? &std::cerr : &std::cout;
+        *stream << "[" << levelStr << "] " << message << std::endl;
+    }
+    
+    static void info(const std::string& message) { log(LogLevel::INFO, message); }
+    static void warning(const std::string& message) { log(LogLevel::WARNING, message); }
+    static void error(const std::string& message) { log(LogLevel::ERROR, message); }
+    static void debug(const std::string& message) { log(LogLevel::DEBUG, message); }
+
+private:
+    static const char* getLevelString(LogLevel::Level level) {
+        switch (level) {
+            case LogLevel::INFO: return "INFO";
+            case LogLevel::WARNING: return "WARN";
+            case LogLevel::ERROR: return "ERROR";
+            case LogLevel::DEBUG: return "DEBUG";
+            default: return "UNKNOWN";
+        }
+    }
+};
+
 // Forward declarations
 struct CabFileInfo {
     std::string filename;

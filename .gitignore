@@ -363,3 +363,15 @@ MigrationBackup/
 FodyWeavers.xsd
 /TestAI/TestAI.vcxproj
 /TestAI/TestAI.vcxproj.filters
+
+# Project-specific files and directories
+*.cab
+*.msu
+*.wim
+logs/
+temp/
+*.tmp
+# DISMV2 specific temporary files
+dismv2_temp/
+*.log
+package_test_files/
