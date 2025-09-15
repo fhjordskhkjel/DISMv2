@@ -39,6 +39,9 @@ namespace fs = std::filesystem;
 #define WIM_MSG_SPLIT              (WIM_MSG | 0x0800)
 #define WIM_MSG_SUCCESS            (WIM_MSG | 0x1000)
 
+// Additional WIMGAPI error codes
+#define ERROR_INVALID_IMAGE_HASH   0xC1420117
+
 namespace {
     // Convert wide string to UTF-8
     std::string wideToUtf8(const std::wstring& wide) {
