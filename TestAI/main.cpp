@@ -4,12 +4,17 @@
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
+#include <deque>
 #include "CabHandler.h"
 #include "PackageSupersedenceManager.h"
 #include "PackageSupersedenceManagerSimple.h"
 #include "CbsManager.h"
 #include "PsfWimHandler.h"
+#include "DismApiWrapper.h"
+#define NOMINMAX
 #include <windows.h>
+#include <chrono>
+#include <sstream>
 
 using namespace WindowsInstallationEnhancement::Simple;
 namespace fs = std::filesystem;
@@ -734,9 +739,7 @@ int main(int argc, char* argv[]) {
             if (installCount > 0) {
                 std::cout << "\n[SUCCESS] " << installCount << " packages are ready for installation\n";
             }
-            if (updateCount > 0) {
-                std::cout << "[UPDATE] " << updateCount << " packages have newer versions available\n";
-            }
+            if (updateCount > 0) std::cout << "[UPDATE] " << updateCount << " packages have newer versions available\n";
         }
         else if (command == "add-package-enhanced") {
             if (argc < 3) {
@@ -1356,6 +1359,123 @@ int main(int argc, char* argv[]) {
                 std::cerr << "[FAILED] Could not detect package type\n";
                 return 1;
             }
+        }
+        else if (command == "enable-feature" || command == "disable-feature") {
+            bool json = false;
+            if (argc < 3) {
+                std::cerr << "Error: Feature name required\n";
+                std::cout << "Usage: " << argv[0] << " " << command << " <FeatureName> [/Online|/Offline /Image:<path>] [--all] [--timeout-ms N] [--json]" << "\n";
+                return 1;
+            }
+            std::string feature = argv[2];
+            DismApiWrapper::Options opt; opt.online = true; opt.timeoutMs = g_opts.timeoutMs.empty() ? opt.timeoutMs : std::atoi(g_opts.timeoutMs.c_str());
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (a == "/Online") opt.online = true; else if (a == "/Offline") opt.online = false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} else if (a == "--all" || a == "/All") opt.all = true; else if (a == "--no-restart") opt.enableNoRestart = true; else if (a == "--json") json = true;
+            }
+            DismApiWrapper dism;
+            std::string out; DWORD code=1;
+            auto t0 = std::chrono::high_resolution_clock::now();
+            bool ok = (command == "enable-feature") ? dism.enableFeature(feature, opt, out, code)
+                                                     : dism.disableFeature(feature, opt, out, code);
+            auto t1 = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+            if (json) {
+                std::ostringstream js; js << "{\"command\":\"" << command << "\",\"feature\":\"" << feature << "\",\"success\":" << ((ok && code==0)?"true":"false") << ",\"exitCode\":" << code << ",\"durationMs\":" << ms << "}";
+                std::cout << js.str() << "\n";
+                if (!ok || code != 0) return 1; else return 0;
+            }
+            if (!ok) { std::cerr << "[FAILED] Failed to start DISM" << "\n"; return 1; }
+            if (code != 0) { std::cerr << "[FAILED] DISM returned code " << code << "\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
+            std::cout << "[SUCCESS] Feature " << feature << ((command=="enable-feature")?" enabled":" disabled") << " in " << ms << " ms\n";
+            if (g_opts.verbose) std::cout << out << "\n";
+        }
+        else if (command == "add-capability" || command == "remove-capability") {
+            if (argc < 3) { std::cerr << "Error: Capability name required\n"; return 1; }
+            std::string name = argv[2];
+            DismApiWrapper::Options opt; opt.online = true; opt.timeoutMs = g_opts.timeoutMs.empty() ? opt.timeoutMs : std::atoi(g_opts.timeoutMs.c_str());
+            for (int i = 3; i < argc; ++i) { std::string a = argv[i]; if (a == "/Online") opt.online=true; else if (a == "/Offline") opt.online=false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} }
+            DismApiWrapper dism; std::string out; DWORD code=1;
+            bool ok = (command == "add-capability") ? dism.addCapability(name, opt, out, code)
+                                                      : dism.removeCapability(name, opt, out, code);
+            if (!ok || code != 0) { std::cerr << "[FAILED] Capability operation failed (code " << code << ")\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
+            std::cout << "[SUCCESS] Capability " << name << ((command=="add-capability")?" added":" removed") << "\n";
+        }
+        else if (command == "add-package-dism" || command == "remove-package-dism") {
+            bool json = false;
+            if (argc < 3) { std::cerr << "Error: Package path/name required\n"; return 1; }
+            std::string value = argv[2];
+            DismApiWrapper::Options opt; opt.online = true; opt.timeoutMs = g_opts.timeoutMs.empty() ? opt.timeoutMs : std::atoi(g_opts.timeoutMs.c_str());
+            for (int i = 3; i < argc; ++i) { std::string a = argv[i]; if (a == "/Online") opt.online=true; else if (a == "/Offline") opt.online=false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} else if (a == "--json") json = true; }
+            DismApiWrapper dism; std::string out; DWORD code=1; bool ok; auto t0=std::chrono::high_resolution_clock::now();
+            if (command == "add-package-dism") ok = dism.addPackage(value, opt, out, code); else ok = dism.removePackage(value, opt, out, code);
+            auto t1=std::chrono::high_resolution_clock::now(); auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
+            if (json) { std::ostringstream js; js << "{\"command\":\""<<command<<"\",\"package\":\""<<value<<"\",\"success\":"<<((ok&&code==0)?"true":"false")<<",\"exitCode\":"<<code<<",\"durationMs\":"<<ms<<"}"; std::cout<<js.str()<<"\n"; return (ok&&code==0)?0:1; }
+            if (!ok || code != 0) { std::cerr << "[FAILED] Package operation failed (code " << code << ")\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
+            std::cout << "[SUCCESS] Package operation completed in " << ms << " ms\n";
+        }
+        else if (command == "add-driver" || command == "remove-driver") {
+            bool json = false;
+            if (argc < 3) { std::cerr << "Error: Driver path (add) or published name (remove) required\n"; return 1; }
+            std::string arg = argv[2];
+            DismApiWrapper::Options opt; opt.online = true; opt.timeoutMs = g_opts.timeoutMs.empty() ? opt.timeoutMs : std::atoi(g_opts.timeoutMs.c_str());
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (a == "/Online") opt.online=true; else if (a == "/Offline") opt.online=false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} else if (a == "--recurse") opt.recurse=true; else if (a == "--no-recurse") opt.recurse=false; else if (a == "--force-unsigned") opt.forceUnsigned=true; else if (a == "--json") json = true;
+            }
+            DismApiWrapper dism; std::string out; DWORD code=1; bool ok; auto t0 = std::chrono::high_resolution_clock::now();
+            if (command == "add-driver") ok = dism.addDriver(arg, opt, out, code); else ok = dism.removeDriver(arg, opt, out, code);
+            auto t1 = std::chrono::high_resolution_clock::now(); auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
+            if (json) { std::ostringstream js; js << "{\"command\":\""<<command<<"\",\"driver\":\""<<arg<<"\",\"success\":"<<((ok&&code==0)?"true":"false")<<",\"exitCode\":"<<code<<",\"durationMs\":"<<ms<<"}"; std::cout<<js.str()<<"\n"; return (ok&&code==0)?0:1; }
+            if (!ok || code != 0) { std::cerr << "[FAILED] Driver operation failed (code " << code << ")\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
+            std::cout << "[SUCCESS] Driver operation completed in " << ms << " ms\n";
+        }
+        else if (command == "add-provisioned-appx") {
+            bool json = false;
+            if (argc < 3) { std::cerr << "Error: Appx/MSIX path required\n"; return 1; }
+            std::string appx = argv[2]; std::vector<std::string> deps; std::string license;
+            DismApiWrapper::Options opt; opt.online = true; opt.timeoutMs = g_opts.timeoutMs.empty() ? opt.timeoutMs : std::atoi(g_opts.timeoutMs.c_str());
+            for ( int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (a == "/Online") opt.online=true; else if (a == "/Offline") opt.online=false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} else if (a == "--dep" && i+1<argc) { deps.emplace_back(argv[++i]); } else if (a == "--license" && i+1<argc) { license = argv[++i]; } else if (a == "--json") json = true;
+            }
+            DismApiWrapper dism; std::string out; DWORD code=1; auto t0=std::chrono::high_resolution_clock::now();
+            bool ok = dism.addProvisionedAppx(appx, deps, license, opt, out, code);
+            auto t1=std::chrono::high_resolution_clock::now(); auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
+            if (json) { std::ostringstream js; js << "{\"command\":\"add-provisioned-appx\",\"package\":\""<<appx<<"\",\"success\":"<<((ok&&code==0)?"true":"false")<<",\"exitCode\":"<<code<<",\"durationMs\":"<<ms<<"}"; std::cout<<js.str()<<"\n"; return (ok&&code==0)?0:1; }
+            if (!ok || code != 0) { std::cerr << "[FAILED] Add-ProvisionedAppxPackage failed (code "<<code<<")\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
+            std::cout << "[SUCCESS] Provisioned app added in " << ms << " ms\n";
+        }
+        else if (command == "remove-provisioned-appx") {
+            bool json = false;
+            if (argc < 3) { std::cerr << "Error: Provisioned package name required\n"; return 1; }
+            std::string name = argv[2]; DismApiWrapper::Options opt; opt.online=true; opt.timeoutMs = g_opts.timeoutMs.empty()?opt.timeoutMs:std::atoi(g_opts.timeoutMs.c_str());
+            for (int i = 3; i < argc; ++i) { std::string a = argv[i]; if (a == "/Online") opt.online=true; else if (a == "/Offline") opt.online=false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} else if (a == "--json") json = true; }
+            DismApiWrapper dism; std::string out; DWORD code=1; auto t0=std::chrono::high_resolution_clock::now();
+            bool ok = dism.removeProvisionedAppx(name, opt, out, code);
+            auto t1=std::chrono::high_resolution_clock::now(); auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
+            if (json) { std::ostringstream js; js << "{\"command\":\"remove-provisioned-appx\",\"package\":\""<<name<<"\",\"success\":"<<((ok&&code==0)?"true":"false")<<",\"exitCode\":"<<code<<",\"durationMs\":"<<ms<<"}"; std::cout<<js.str()<<"\n"; return (ok&&code==0)?0:1; }
+            if (!ok || code != 0) { std::cerr << "[FAILED] Remove-ProvisionedAppxPackage failed (code "<<code<<")\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
+            std::cout << "[SUCCESS] Provisioned app removed in " << ms << " ms\n";
+        }
+        else if (command == "tail-cbs-logs") {
+            int lines = 200;
+            if (argc >= 3) { int v = std::atoi(argv[2]); if (v < 1) v = 1; lines = v; }
+            std::vector<std::wstring> targets;
+            wchar_t windir[MAX_PATH] = {}; GetWindowsDirectoryW(windir, MAX_PATH);
+            std::wstring cbs = std::wstring(windir) + L"\\Logs\\CBS\\CBS.log";
+            std::wstring dism = std::wstring(windir) + L"\\Logs\\DISM\\dism.log";
+            targets.push_back(cbs); targets.push_back(dism);
+            auto tailFile = [&](const std::wstring& path){
+                std::wifstream in(path);
+                if (!in.is_open()) { std::wcout << L"[WARN] Cannot open: " << path << L"\n"; return; }
+                std::deque<std::wstring> ring; std::wstring line;
+                while (std::getline(in, line)) { ring.push_back(line); if ((int)ring.size() > lines) ring.pop_front(); }
+                std::wcout << L"==== Tail of " << path << L" (last " << lines << L" lines) ====" << L"\n";
+                for (auto& l : ring) std::wcout << l << L"\n";
+                std::wcout << L"==== End ====" << L"\n\n";
+            };
+            for (auto& t : targets) tailFile(t);
         }
         else {
             std::cout << "Command '" << command << "' not fully implemented in this demonstration.\n";
