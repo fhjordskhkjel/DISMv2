@@ -1,5 +1,6 @@
 #include "PsfWimHandler.h"
 #include "CabHandler.h"
+#include "WimgApiWrapper.h"
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -10,6 +11,16 @@
 #include <chrono>
 #include <iomanip>
 #include <regex>
+
+#include <windows.h>
+#include <appxpackaging.h>
+#include <shlwapi.h>
+#include <comutil.h>
+#include <atlbase.h>
+
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 #include <windows.h>
 #include <appxpackaging.h>
@@ -67,15 +78,53 @@ class PsfWimHandlerImpl {
 private:
     bool initialized = false;
     std::string lastError;
+    std::unique_ptr<WimgApiWrapper> wimgApiWrapper;
+    WimProgressCallback progressCallback;
+    bool useWimgApi = false;
 
 public:
     bool initialize() {
         if (initialized) return true;
         HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         if (FAILED(hr) && hr != RPC_E_CHANGED_MODE && hr != S_FALSE) { lastError = "Failed to initialize COM"; return false; }
-        initialized = true; return true;
+        
+        // Try to initialize WIMGAPI wrapper
+        wimgApiWrapper = std::make_unique<WimgApiWrapper>();
+        useWimgApi = wimgApiWrapper->initialize();
+        
+        if (!useWimgApi) {
+            std::cout << "[INFO] WIMGAPI not available, falling back to DISM-based operations\n";
+        } else {
+            std::cout << "[INFO] Using native WIMGAPI for WIM operations\n";
+        }
+        
+        initialized = true; 
+        return true;
     }
-    void cleanup() { if (initialized) { CoUninitialize(); initialized = false; } }
+    
+    void cleanup() { 
+        if (wimgApiWrapper) {
+            wimgApiWrapper->cleanup();
+            wimgApiWrapper.reset();
+        }
+        if (initialized) { 
+            CoUninitialize(); 
+            initialized = false; 
+        } 
+    }
+
+    void setProgressCallback(WimProgressCallback callback) {
+        progressCallback = std::move(callback);
+        if (wimgApiWrapper && useWimgApi) {
+            // Adapt callback for WimgApiWrapper
+            wimgApiWrapper->setProgressCallback([this](WimMessageType type, const WimProgressInfo& progress, const std::string& message) {
+                if (progressCallback) {
+                    int messageType = static_cast<int>(type);
+                    progressCallback(messageType, progress.processedBytes, progress.totalBytes, message);
+                }
+            });
+        }
+    }
 
     // APPX/MSIX operations using proper Windows APIs
     bool extractAppxPackage(const std::string& packagePath, const std::string& destination) {
@@ -159,6 +208,188 @@ public:
     }
 
     bool listWimImages(const std::string& wimPath, std::vector<WimImageInfo>& images) {
+        if (useWimgApi && wimgApiWrapper) {
+            return listWimImagesNative(wimPath, images);
+        } else {
+            return listWimImagesDism(wimPath, images);
+        }
+    }
+
+    bool extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination, 
+                        bool verifyIntegrity, bool preserveAcls, bool preserveTimestamps, bool preserveReparsePoints) {
+        if (useWimgApi && wimgApiWrapper) {
+            return extractWimImageNative(wimPath, imageIndex, destination, verifyIntegrity, preserveAcls, preserveTimestamps, preserveReparsePoints);
+        } else {
+            return extractWimImageDism(wimPath, imageIndex, destination);
+        }
+    }
+
+    bool captureWimImage(const std::string& sourcePath, const std::string& wimPath, const std::string& imageName, 
+                        const std::string& description, WimCompression compression, bool verifyIntegrity) {
+        if (useWimgApi && wimgApiWrapper) {
+            return captureWimImageNative(sourcePath, wimPath, imageName, description, compression, verifyIntegrity);
+        } else {
+            return captureWimImageDism(sourcePath, wimPath, imageName, description, compression);
+        }
+    }
+
+    bool verifyWimIntegrity(const std::string& wimPath) {
+        if (useWimgApi && wimgApiWrapper) {
+            // Open WIM with integrity checking enabled
+            HANDLE wimHandle = wimgApiWrapper->createWimFile(wimPath, WimAccessMode::Read);
+            if (!wimHandle) {
+                lastError = "Failed to open WIM for integrity verification: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+                return false;
+            }
+
+            bool success = wimgApiWrapper->setIntegrityCheck(wimHandle, true);
+            wimgApiWrapper->closeHandle(wimHandle);
+            
+            if (!success) {
+                lastError = "Integrity verification failed: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+                return false;
+            }
+            return true;
+        } else {
+            // Use DISM for verification
+            std::wstring dism = GetSystemToolPath(L"dism.exe");
+            std::wstring wWim(wimPath.begin(), wimPath.end());
+            std::wstring cmd = L"\"" + dism + L"\" /English /Get-WimInfo /WimFile:\"" + wWim + L"\" /CheckIntegrity";
+            std::string out; 
+            DWORD code = 1; 
+            if (!RunProcessCapture(cmd, 5*60*1000, out, code)) { 
+                lastError = "Failed to run DISM"; 
+                return false; 
+            }
+            if (code != 0) { 
+                lastError = std::string("DISM integrity check failed: ") + out; 
+                return false; 
+            }
+            return true;
+        }
+    }
+
+    bool validateCompressionType(const std::string& wimPath, WimCompression compression) {
+        WimCompressionType nativeCompression;
+        switch (compression) {
+            case WimCompression::None:
+                nativeCompression = WimCompressionType::None;
+                break;
+            case WimCompression::Xpress:
+                nativeCompression = WimCompressionType::Xpress;
+                break;
+            case WimCompression::LZX:
+                nativeCompression = WimCompressionType::LZX;
+                break;
+            case WimCompression::LZMS:
+                nativeCompression = WimCompressionType::LZMS;
+                break;
+            default:
+                return false;
+        }
+        
+        return WimgApiWrapper::validateCompressionForFile(wimPath, nativeCompression);
+    }
+
+private:
+    bool listWimImagesNative(const std::string& wimPath, std::vector<WimImageInfo>& images) {
+        HANDLE wimHandle = wimgApiWrapper->createWimFile(wimPath, WimAccessMode::Read);
+        if (!wimHandle) {
+            lastError = "Failed to open WIM file: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+            return false;
+        }
+
+        bool success = wimgApiWrapper->getImageInformation(wimHandle, images);
+        wimgApiWrapper->closeHandle(wimHandle);
+        
+        if (!success) {
+            lastError = "Failed to get image information: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+            return false;
+        }
+        
+        return true;
+    }
+
+    bool extractWimImageNative(const std::string& wimPath, int imageIndex, const std::string& destination,
+                              bool verifyIntegrity, bool preserveAcls, bool preserveTimestamps, bool preserveReparsePoints) {
+        HANDLE wimHandle = wimgApiWrapper->createWimFile(wimPath, WimAccessMode::Read);
+        if (!wimHandle) {
+            lastError = "Failed to open WIM file: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+            return false;
+        }
+
+        // Set integrity checking if requested
+        if (verifyIntegrity) {
+            wimgApiWrapper->setIntegrityCheck(wimHandle, true);
+        }
+
+        HANDLE imageHandle = wimgApiWrapper->loadImage(wimHandle, imageIndex);
+        if (!imageHandle) {
+            lastError = "Failed to load image: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+            wimgApiWrapper->closeHandle(wimHandle);
+            return false;
+        }
+
+        // Build flags based on options
+        DWORD flags = 0;
+        if (!preserveAcls) flags |= 0x00000008; // WIM_FLAG_NO_APPLY_ACL
+        if (!preserveTimestamps) flags |= 0x00000010; // WIM_FLAG_NO_APPLY_SECURITY  
+        if (!preserveReparsePoints) flags |= 0x00000100; // WIM_FLAG_NO_RP_FIX
+
+        bool success = wimgApiWrapper->applyImage(imageHandle, destination, flags);
+        
+        wimgApiWrapper->closeHandle(imageHandle);
+        wimgApiWrapper->closeHandle(wimHandle);
+        
+        if (!success) {
+            lastError = "Failed to extract image: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+            return false;
+        }
+        
+        return true;
+    }
+
+    bool captureWimImageNative(const std::string& sourcePath, const std::string& wimPath, const std::string& imageName, 
+                              const std::string& description, WimCompression compression, bool verifyIntegrity) {
+        // Validate compression type
+        if (!validateCompressionType(wimPath, compression)) {
+            lastError = "Invalid compression type for file: " + wimPath;
+            return false;
+        }
+
+        WimCompressionType nativeCompression;
+        switch (compression) {
+            case WimCompression::None: nativeCompression = WimCompressionType::None; break;
+            case WimCompression::Xpress: nativeCompression = WimCompressionType::Xpress; break;
+            case WimCompression::LZX: nativeCompression = WimCompressionType::LZX; break;
+            case WimCompression::LZMS: nativeCompression = WimCompressionType::LZMS; break;
+            default: nativeCompression = WimCompressionType::LZX; break;
+        }
+
+        HANDLE wimHandle = wimgApiWrapper->createWimFile(wimPath, WimAccessMode::Write, CREATE_ALWAYS, nativeCompression);
+        if (!wimHandle) {
+            lastError = "Failed to create WIM file: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+            return false;
+        }
+
+        // Set integrity checking if requested
+        if (verifyIntegrity) {
+            wimgApiWrapper->setIntegrityCheck(wimHandle, true);
+        }
+
+        HANDLE imageHandle = wimgApiWrapper->captureImage(wimHandle, sourcePath, 0);
+        if (!imageHandle) {
+            lastError = "Failed to capture image: " + wimgApiWrapper->getLastError().userFriendlyMessage;
+            wimgApiWrapper->closeHandle(wimHandle);
+            return false;
+        }
+
+        wimgApiWrapper->closeHandle(imageHandle);
+        wimgApiWrapper->closeHandle(wimHandle);
+        return true;
+    }
+
+    bool listWimImagesDism(const std::string& wimPath, std::vector<WimImageInfo>& images) {
         try {
             std::wstring dism = GetSystemToolPath(L"dism.exe");
             std::wstring wWim(wimPath.begin(), wimPath.end());
@@ -185,7 +416,7 @@ public:
         } catch (...) { lastError = "listWimImages failed"; return false; }
     }
 
-    bool extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination) {
+    bool extractWimImageDism(const std::string& wimPath, int imageIndex, const std::string& destination) {
         try {
             fs::create_directories(destination);
             std::wstring dism = GetSystemToolPath(L"dism.exe");
@@ -197,7 +428,7 @@ public:
         } catch (...) { lastError = "extractWimImage failed"; return false; }
     }
 
-    bool captureWimImage(const std::string& sourcePath, const std::string& wimPath, const std::string& imageName, const std::string& description, WimCompression compression) {
+    bool captureWimImageDism(const std::string& sourcePath, const std::string& wimPath, const std::string& imageName, const std::string& description, WimCompression compression) {
         try {
             if (!fs::exists(sourcePath)) { lastError = "Source path does not exist: "+sourcePath; return false; }
             fs::create_directories(fs::path(wimPath).parent_path());
@@ -228,9 +459,22 @@ bool PsfWimHandler::installAppxOnline(const std::string& packagePath, bool allUs
 bool PsfWimHandler::uninstallAppxOnline(const std::string& packageFullName, bool allUsers) { return impl->uninstallAppxOnline(packageFullName, allUsers); }
 
 bool PsfWimHandler::listWimImages(const std::string& wimPath, std::vector<WimImageInfo>& images) { return impl->listWimImages(wimPath, images); }
-bool PsfWimHandler::extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination) { return impl->extractWimImage(wimPath, imageIndex, destination); }
-bool PsfWimHandler::applyWimImage(const std::string& wimPath, int imageIndex, const std::string& destination) { return impl->extractWimImage(wimPath, imageIndex, destination); }
-bool PsfWimHandler::captureWimImage(const std::string& sourcePath, const std::string& wimPath, const std::string& imageName, const std::string& description, WimCompression compression) { return impl->captureWimImage(sourcePath, wimPath, imageName, description, compression); }
+bool PsfWimHandler::extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination, 
+                                   bool verifyIntegrity, bool preserveAcls, bool preserveTimestamps, bool preserveReparsePoints) { 
+    return impl->extractWimImage(wimPath, imageIndex, destination, verifyIntegrity, preserveAcls, preserveTimestamps, preserveReparsePoints); 
+}
+bool PsfWimHandler::applyWimImage(const std::string& wimPath, int imageIndex, const std::string& destination,
+                                 bool verifyIntegrity, bool preserveAcls, bool preserveTimestamps, bool preserveReparsePoints) { 
+    return impl->extractWimImage(wimPath, imageIndex, destination, verifyIntegrity, preserveAcls, preserveTimestamps, preserveReparsePoints); 
+}
+bool PsfWimHandler::captureWimImage(const std::string& sourcePath, const std::string& wimPath, const std::string& imageName, 
+                                   const std::string& description, WimCompression compression, bool verifyIntegrity) { 
+    return impl->captureWimImage(sourcePath, wimPath, imageName, description, compression, verifyIntegrity); 
+}
+
+void PsfWimHandler::setProgressCallback(WimProgressCallback callback) { impl->setProgressCallback(std::move(callback)); }
+bool PsfWimHandler::verifyWimIntegrity(const std::string& wimPath) { return impl->verifyWimIntegrity(wimPath); }
+bool PsfWimHandler::validateCompressionType(const std::string& wimPath, WimCompression compression) { return impl->validateCompressionType(wimPath, compression); }
 
 std::string PsfWimHandler::getLastError() const { return impl->getLastError(); }
 
@@ -244,6 +488,10 @@ bool PsfWimHandler::detectPackageType(const std::string& packagePath, PackageTyp
     if (header[0] == 'P' && header[1] == 'K' && header[2] == 0x03 && header[3] == 0x04) { type = PackageType::APPX_MSIX; return true; }
     if (header[0] == 'M' && header[1] == 'S' && header[2] == 'C' && header[3] == 'F') { type = PackageType::CAB; return true; }
     return false;
+}
+
+bool PsfWimHandler::isWimgapiAvailable() {
+    return WimgApiWrapper::isWimgapiAvailable();
 }
 
 namespace PsfWimUtils {

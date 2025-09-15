@@ -7,6 +7,7 @@
 
 // Forward declarations to avoid including Windows headers in the interface
 class PsfWimHandlerImpl;
+class WimgApiWrapper;
 
 // Package type enumeration
 enum class PackageType {
@@ -20,13 +21,16 @@ enum class PackageType {
 // Forward declaration of WimImageInfo (defined in CabHandler.h)
 struct WimImageInfo;
 
-// WIM compression selection
+// WIM compression selection (kept for backward compatibility)
 enum class WimCompression {
     None,
     Xpress,
     LZX,
     LZMS
 };
+
+// Progress callback for WIM operations
+using WimProgressCallback = std::function<void(int messageType, uint64_t processedBytes, uint64_t totalBytes, const std::string& message)>;
 
 // Main PSF/WIM Handler class using proper Windows APIs
 class PsfWimHandler {
@@ -58,19 +62,35 @@ public:
     bool installAppxOnline(const std::string& packagePath, bool allUsers = false);
     bool uninstallAppxOnline(const std::string& packageFullName, bool allUsers = false);
 
-    // WIM operations using wimgapi.dll (with progress callbacks)
+    // WIM operations using wimgapi.dll (with progress callbacks and integrity verification)
     bool listWimImages(const std::string& wimPath, std::vector<WimImageInfo>& images);
-    bool extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination);
-    bool applyWimImage(const std::string& wimPath, int imageIndex, const std::string& destination);
+    bool extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination, 
+                        bool verifyIntegrity = false, bool preserveAcls = true, bool preserveTimestamps = true, 
+                        bool preserveReparsePoints = true);
+    bool applyWimImage(const std::string& wimPath, int imageIndex, const std::string& destination,
+                      bool verifyIntegrity = false, bool preserveAcls = true, bool preserveTimestamps = true, 
+                      bool preserveReparsePoints = true);
     bool captureWimImage(const std::string& sourcePath, const std::string& wimPath, 
                         const std::string& imageName, const std::string& description,
-                        WimCompression compression = WimCompression::LZX);
+                        WimCompression compression = WimCompression::LZX, bool verifyIntegrity = false);
+
+    // Progress callback support
+    void setProgressCallback(WimProgressCallback callback);
+
+    // Integrity verification
+    bool verifyWimIntegrity(const std::string& wimPath);
+
+    // Compression validation
+    bool validateCompressionType(const std::string& wimPath, WimCompression compression);
 
     // Error handling
     std::string getLastError() const;
 
     // Static utility functions
     static bool detectPackageType(const std::string& packagePath, PackageType& type);
+    
+    // Check if WIMGAPI is available for native operations
+    static bool isWimgapiAvailable();
 };
 
 // Utility namespace for PSF/WIM operations  

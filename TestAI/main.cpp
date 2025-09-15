@@ -166,9 +166,12 @@ void printUsage() {
     std::cout << "Enhanced Universal Package Operations:\n";
     std::cout << "  extract-psf <package> <destination>  - Extract PSF/APPX/MSIX using Windows APIs\n";
     std::cout << "  list-psf <package>                   - List PSF/APPX/MSIX package information\n";
-    std::cout << "  extract-wim <wim> <index> <dest>     - Extract WIM image using wimgapi.dll\n";
-    std::cout << "  list-wim <wim>                       - List WIM images using wimgapi.dll\n";
-    std::cout << "  capture-wim <source> <wim> <name> <desc> - Capture directory to WIM\n";
+    std::cout << "  extract-wim <wim> <index> <dest> [options] - Extract WIM image using wimgapi.dll\n";
+    std::cout << "    Options: [--wim-verify] [--no-acls] [--no-timestamps] [--no-reparse-points]\n";
+    std::cout << "  list-wim <wim> [--wim-verify]        - List WIM images using wimgapi.dll\n";
+    std::cout << "  capture-wim <source> <wim> <name> <desc> [options] - Capture directory to WIM\n";
+    std::cout << "    Options: [--compress {xpress|lzx|lzms}] [--wim-verify]\n";
+    std::cout << "  verify-wim <wim>                     - Verify WIM file integrity\n";
     std::cout << "  detect-type <package>                - Auto-detect package format\n";
     
     std::cout << "\nPackage Supersedence & Intelligence Commands:\n";
@@ -1194,20 +1197,40 @@ int main(int argc, char* argv[]) {
         else if (command == "list-wim") {
             if (argc < 3) {
                 std::cerr << "Error: WIM path required for list-wim command\n";
-                std::cout << "Usage: " << argv[0] << " list-wim <wim>\n";
+                std::cout << "Usage: " << argv[0] << " list-wim <wim> [--wim-verify]\n";
                 return 1;
             }
             
             std::string wimPath = argv[2];
+            bool verifyIntegrity = false;
             
-            std::cout << "WIM Image Information (wimgapi.dll)\n";
-            std::cout << "====================================\n";
-            std::cout << "WIM File: " << wimPath << "\n\n";
+            for (int i = 3; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--wim-verify") {
+                    verifyIntegrity = true;
+                }
+            }
+            
+            std::cout << "WIM Image Information (Enhanced)\n";
+            std::cout << "=================================\n";
+            std::cout << "WIM File: " << wimPath << "\n";
+            std::cout << "Integrity Verification: " << (verifyIntegrity ? "ENABLED" : "DISABLED") << "\n";
+            std::cout << "Using: " << (PsfWimHandler::isWimgapiAvailable() ? "Native WIMGAPI" : "DISM Fallback") << "\n\n";
             
             PsfWimHandler handler;
             if (!handler.initialize()) {
                 std::cerr << "[FAILED] Failed to initialize PSF/WIM handler\n";
                 return 1;
+            }
+            
+            // Perform integrity verification if requested
+            if (verifyIntegrity) {
+                std::cout << "Verifying WIM integrity...\n";
+                if (!handler.verifyWimIntegrity(wimPath)) {
+                    std::cerr << "[FAILED] WIM integrity verification failed: " << handler.getLastError() << "\n";
+                    return 1;
+                }
+                std::cout << "[SUCCESS] WIM integrity verification passed\n\n";
             }
             
             std::vector<WimImageInfo> images;
@@ -1235,7 +1258,12 @@ int main(int argc, char* argv[]) {
         else if (command == "extract-wim") {
             if (argc < 5) {
                 std::cerr << "Error: WIM path, image index, and destination required\n";
-                std::cout << "Usage: " << argv[0] << " extract-wim <wim> <index> <destination>\n";
+                std::cout << "Usage: " << argv[0] << " extract-wim <wim> <index> <destination> [options]\n";
+                std::cout << "Options:\n";
+                std::cout << "  --wim-verify           - Enable integrity verification\n";
+                std::cout << "  --no-acls              - Don't preserve ACLs\n";
+                std::cout << "  --no-timestamps        - Don't preserve timestamps\n";
+                std::cout << "  --no-reparse-points    - Don't preserve reparse points\n";
                 return 1;
             }
             
@@ -1243,11 +1271,35 @@ int main(int argc, char* argv[]) {
             int imageIndex = std::atoi(argv[3]);
             std::string destination = argv[4];
             
-            std::cout << "WIM Image Extraction (wimgapi.dll)\n";
-            std::cout << "===================================\n";
+            // Parse additional options
+            bool verifyIntegrity = false;
+            bool preserveAcls = true;
+            bool preserveTimestamps = true;
+            bool preserveReparsePoints = true;
+            
+            for (int i = 5; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--wim-verify") {
+                    verifyIntegrity = true;
+                } else if (arg == "--no-acls") {
+                    preserveAcls = false;
+                } else if (arg == "--no-timestamps") {
+                    preserveTimestamps = false;
+                } else if (arg == "--no-reparse-points") {
+                    preserveReparsePoints = false;
+                }
+            }
+            
+            std::cout << "WIM Image Extraction (Enhanced)\n";
+            std::cout << "================================\n";
             std::cout << "WIM File: " << wimPath << "\n";
             std::cout << "Image Index: " << imageIndex << "\n";
-            std::cout << "Destination: " << destination << "\n\n";
+            std::cout << "Destination: " << destination << "\n";
+            std::cout << "Integrity Verification: " << (verifyIntegrity ? "ENABLED" : "DISABLED") << "\n";
+            std::cout << "Preserve ACLs: " << (preserveAcls ? "YES" : "NO") << "\n";
+            std::cout << "Preserve Timestamps: " << (preserveTimestamps ? "YES" : "NO") << "\n";
+            std::cout << "Preserve Reparse Points: " << (preserveReparsePoints ? "YES" : "NO") << "\n";
+            std::cout << "Using: " << (PsfWimHandler::isWimgapiAvailable() ? "Native WIMGAPI" : "DISM Fallback") << "\n\n";
             
             PsfWimHandler handler;
             if (!handler.initialize()) {
@@ -1255,18 +1307,33 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            if (handler.extractWimImage(wimPath, imageIndex, destination)) {
-                std::cout << "[SUCCESS] WIM image extracted successfully!\n";
+            // Set up progress callback
+            handler.setProgressCallback([](int messageType, uint64_t processedBytes, uint64_t totalBytes, const std::string& message) {
+                if (messageType == 2) { // Progress message
+                    if (totalBytes > 0) {
+                        double percent = (static_cast<double>(processedBytes) / totalBytes) * 100.0;
+                        std::cout << "\rProgress: " << static_cast<int>(percent) << "% - " << message << std::flush;
+                    }
+                } else {
+                    std::cout << "\n[INFO] " << message << std::endl;
+                }
+            });
+
+            if (handler.extractWimImage(wimPath, imageIndex, destination, verifyIntegrity, preserveAcls, preserveTimestamps, preserveReparsePoints)) {
+                std::cout << "\n[SUCCESS] WIM image extracted successfully!\n";
                 std::cout << "Location: " << destination << "\n";
             } else {
-                std::cerr << "[FAILED] WIM extraction failed: " << handler.getLastError() << "\n";
+                std::cerr << "\n[FAILED] WIM extraction failed: " << handler.getLastError() << "\n";
                 return 1;
             }
         }
         else if (command == "capture-wim") {
             if (argc < 6) {
                 std::cerr << "Error: Source path, WIM path, image name, and description required\n";
-                std::cout << "Usage: " << argv[0] << " capture-wim <source> <wim> <name> <description>\n";
+                std::cout << "Usage: " << argv[0] << " capture-wim <source> <wim> <name> <description> [options]\n";
+                std::cout << "Options:\n";
+                std::cout << "  --compress {xpress|lzx|lzms}  - Set compression type (default: lzx)\n";
+                std::cout << "  --wim-verify                  - Enable integrity verification\n";
                 return 1;
             }
             
@@ -1275,12 +1342,53 @@ int main(int argc, char* argv[]) {
             std::string imageName = argv[4];
             std::string description = argv[5];
             
-            std::cout << "WIM Image Capture (wimgapi.dll)\n";
-            std::cout << "===============================\n";
+            // Parse additional options
+            WimCompression compression = WimCompression::LZX;
+            bool verifyIntegrity = false;
+            
+            for (int i = 6; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--compress" && i + 1 < argc) {
+                    std::string compType = argv[++i];
+                    std::transform(compType.begin(), compType.end(), compType.begin(), ::tolower);
+                    if (compType == "xpress") {
+                        compression = WimCompression::Xpress;
+                    } else if (compType == "lzx") {
+                        compression = WimCompression::LZX;
+                    } else if (compType == "lzms") {
+                        compression = WimCompression::LZMS;
+                        // Validate that LZMS is only used with .esd files
+                        auto ext = fs::path(wimPath).extension().string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                        if (ext != ".esd") {
+                            std::cerr << "[FAILED] LZMS compression is only supported for .esd files\n";
+                            return 1;
+                        }
+                    } else {
+                        std::cerr << "[FAILED] Invalid compression type: " << compType << "\n";
+                        std::cerr << "Valid options: xpress, lzx, lzms\n";
+                        return 1;
+                    }
+                } else if (arg == "--wim-verify") {
+                    verifyIntegrity = true;
+                }
+            }
+            
+            std::cout << "WIM Image Capture (Enhanced)\n";
+            std::cout << "============================\n";
             std::cout << "Source: " << sourcePath << "\n";
             std::cout << "WIM File: " << wimPath << "\n";
             std::cout << "Image Name: " << imageName << "\n";
-            std::cout << "Description: " << description << "\n\n";
+            std::cout << "Description: " << description << "\n";
+            std::cout << "Compression: ";
+            switch (compression) {
+                case WimCompression::None: std::cout << "None"; break;
+                case WimCompression::Xpress: std::cout << "Xpress (fast)"; break;
+                case WimCompression::LZX: std::cout << "LZX (balanced)"; break;
+                case WimCompression::LZMS: std::cout << "LZMS (maximum, ESD only)"; break;
+            }
+            std::cout << "\nIntegrity Verification: " << (verifyIntegrity ? "ENABLED" : "DISABLED") << "\n";
+            std::cout << "Using: " << (PsfWimHandler::isWimgapiAvailable() ? "Native WIMGAPI" : "DISM Fallback") << "\n\n";
             
             PsfWimHandler handler;
             if (!handler.initialize()) {
@@ -1288,11 +1396,58 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             
-            if (handler.captureWimImage(sourcePath, wimPath, imageName, description)) {
-                std::cout << "[SUCCESS] Directory captured to WIM successfully!\n";
+            // Validate compression for target file
+            if (!handler.validateCompressionType(wimPath, compression)) {
+                std::cerr << "[FAILED] Invalid compression type for target file\n";
+                return 1;
+            }
+
+            // Set up progress callback
+            handler.setProgressCallback([](int messageType, uint64_t processedBytes, uint64_t totalBytes, const std::string& message) {
+                if (messageType == 2) { // Progress message
+                    if (totalBytes > 0) {
+                        double percent = (static_cast<double>(processedBytes) / totalBytes) * 100.0;
+                        std::cout << "\rProgress: " << static_cast<int>(percent) << "% - " << message << std::flush;
+                    }
+                } else {
+                    std::cout << "\n[INFO] " << message << std::endl;
+                }
+            });
+            
+            if (handler.captureWimImage(sourcePath, wimPath, imageName, description, compression, verifyIntegrity)) {
+                std::cout << "\n[SUCCESS] Directory captured to WIM successfully!\n";
                 std::cout << "WIM File: " << wimPath << "\n";
             } else {
-                std::cerr << "[FAILED] WIM capture failed: " << handler.getLastError() << "\n";
+                std::cerr << "\n[FAILED] WIM capture failed: " << handler.getLastError() << "\n";
+                return 1;
+            }
+        }
+        else if (command == "verify-wim") {
+            if (argc < 3) {
+                std::cerr << "Error: WIM path required for verify-wim command\n";
+                std::cout << "Usage: " << argv[0] << " verify-wim <wim>\n";
+                return 1;
+            }
+            
+            std::string wimPath = argv[2];
+            
+            std::cout << "WIM Integrity Verification\n";
+            std::cout << "===========================\n";
+            std::cout << "WIM File: " << wimPath << "\n";
+            std::cout << "Using: " << (PsfWimHandler::isWimgapiAvailable() ? "Native WIMGAPI" : "DISM Fallback") << "\n\n";
+            
+            PsfWimHandler handler;
+            if (!handler.initialize()) {
+                std::cerr << "[FAILED] Failed to initialize PSF/WIM handler\n";
+                return 1;
+            }
+            
+            std::cout << "Verifying WIM file integrity...\n";
+            if (handler.verifyWimIntegrity(wimPath)) {
+                std::cout << "[SUCCESS] WIM integrity verification passed\n";
+                std::cout << "The WIM file is valid and uncorrupted.\n";
+            } else {
+                std::cerr << "[FAILED] WIM integrity verification failed: " << handler.getLastError() << "\n";
                 return 1;
             }
         }
