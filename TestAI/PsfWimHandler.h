@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <functional>
 
 // Forward declarations to avoid including Windows headers in the interface
 class PsfWimHandlerImpl;
@@ -18,6 +19,14 @@ enum class PackageType {
 
 // Forward declaration of WimImageInfo (defined in CabHandler.h)
 struct WimImageInfo;
+
+// WIM compression selection
+enum class WimCompression {
+    None,
+    Xpress,
+    LZX,
+    LZMS
+};
 
 // Main PSF/WIM Handler class using proper Windows APIs
 class PsfWimHandler {
@@ -45,12 +54,17 @@ public:
     bool getPsfPackageInfo(const std::string& packagePath, std::string& packageName, 
                           std::string& version, std::string& architecture);
 
-    // WIM operations using wimgapi.dll
+    // Optional online install/uninstall using Deployment API (fallback to PowerShell if unavailable)
+    bool installAppxOnline(const std::string& packagePath, bool allUsers = false);
+    bool uninstallAppxOnline(const std::string& packageFullName, bool allUsers = false);
+
+    // WIM operations using wimgapi.dll (with progress callbacks)
     bool listWimImages(const std::string& wimPath, std::vector<WimImageInfo>& images);
     bool extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination);
     bool applyWimImage(const std::string& wimPath, int imageIndex, const std::string& destination);
     bool captureWimImage(const std::string& sourcePath, const std::string& wimPath, 
-                        const std::string& imageName, const std::string& description);
+                        const std::string& imageName, const std::string& description,
+                        WimCompression compression = WimCompression::LZX);
 
     // Error handling
     std::string getLastError() const;
