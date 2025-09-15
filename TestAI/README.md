@@ -11,6 +11,8 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - Hardened temp and logging with environment overrides
 - Absolute System32 tool invocation (expand/dism/wusa) and WOW64-safe resolution
 - UNC-safe extraction (auto local copy) and reparse-point/skipped symlink safety
+- Native WIM apply/capture via wimgapi.dll with integrity checks and progress (fallback to DISM when unavailable)
+- Native APPX/MSIX extraction via AppxPackaging API
 
 ## New in this build
 - MSU extraction fixes: prefer expand.exe, optional DISM /Image extract, fallback wusa /extract
@@ -26,6 +28,9 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - Tool timeout override: --timeout-ms N (or env DISMV2_TIMEOUT_MS) to control external tool timeouts
 - Better payload mapping: improved destination mapping for Boot, Recovery, LCU, System32\Drivers, Fonts, INF, PolicyDefinitions, SysWOW64
 - PSF/WIM handling in CBS flow: .appx/.msix/.psf/.wim/.esd routed to specialized handler instead of plain file copy
+- Native WIMGAPI path for WIM apply/capture (WIMCreateFile, WIMLoadImage, WIMApplyImage, WIMCaptureImage) with progress callback; auto-fallback to DISM
+- New WIM flags: --wim-verify/--wim-no-verify, --wim-temp <dir>, --wim-progress
+- Improved package signature verification via WinVerifyTrust; basic MUM parsing via MSXML6
 
 ## Commands
 - `extract-psf <package> <dest>`
@@ -47,6 +52,17 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - `--no-catalog-register` (disable system catalog registration)
 - `--timeout-ms <int>` (override external tool timeouts)
 
+## WIM operations
+- Uses native wimgapi when available for apply/capture, including:
+  - Integrity verification (WIMSetIntegrityCheck)
+  - Temporary path control (WIMSetTemporaryPath)
+  - Progress callback (WIMRegisterMessageCallback)
+- Automatically falls back to `dism.exe` for apply/capture when wimgapi is unavailable or fails.
+- CLI flags:
+  - `--wim-verify` or `--wim-no-verify`: enable/disable WIM integrity verification (default on)
+  - `--wim-temp <dir>`: set temporary path used by wimgapi
+  - `--wim-progress`: enable progress logging for WIM operations
+
 ## MSU extraction details
 Order of methods attempted:
 1. `expand.exe "<msu>" -F:* "<dest>"`
@@ -63,15 +79,20 @@ Notes:
 - `DISMV2_TEMP`: override temp/staging root
 - `DISMV2_LOG`: path to a log file sink
 - `DISMV2_TIMEOUT_MS`: override external tool timeouts (expand/dism/wusa)
+- `DISMV2_WIM_VERIFY`: `1`/`0` toggle for WIM integrity verification (default `1`)
+- `DISMV2_WIM_TEMP`: temporary directory for WIM operations
+- `DISMV2_WIM_PROGRESS`: enable progress logging for WIM operations
 
 ## Logging and diagnostics
 - `--verbose` logs executed commands
 - Captured output from external tools is included
 - Logs rotate by size to avoid unbounded growth
+- WIM operations report progress when enabled
 
 ## Building
 - C++20, Windows desktop, x64
 - Requires Windows SDK: AppxPackaging and MSXML
+- Optional: `wimgapi.h` (native WIM path); if not present, DISM fallback is used automatically
 
 ## Security
 - Reduced PowerShell usage; prefer native tools
@@ -88,6 +109,8 @@ Notes:
   - `DISMv2.exe add-package-enhanced /PackagePath:"C:\updates\KB.msu" /CBS /Online --no-powershell --no-wusa --no-7z`
 - Disable catalog registration and set timeout
   - `DISMv2.exe add-package-enhanced /PackagePath:"C:\updates\KB.msu" /CBS /Online --no-catalog-register --timeout-ms 900000`
+- WIM with verification and temp path
+  - `DISMv2.exe extract-wim install.wim 1 D:\Apply --wim-verify --wim-temp D:\WimTemp --wim-progress`
 
 ## Status
 Build-ready and tested. Use `--log` and `--verbose` for best diagnostics.

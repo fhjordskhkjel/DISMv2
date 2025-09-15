@@ -21,6 +21,14 @@
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "shlwapi.lib")
 
+// Optional native WIMGAPI integration
+#if __has_include(<wimgapi.h>)
+  #define WITH_WIMGAPI 1
+  #include <wimgapi.h>
+#else
+  #define WITH_WIMGAPI 0
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -67,6 +75,119 @@ class PsfWimHandlerImpl {
 private:
     bool initialized = false;
     std::string lastError;
+
+#if WITH_WIMGAPI
+    static DWORD CALLBACK WimMsgCb(PVOID, UINT msgId, WPARAM wParam, LPARAM lParam, PVOID userData) {
+        PsfWimHandlerImpl* self = reinterpret_cast<PsfWimHandlerImpl*>(userData);
+        (void)self; (void)lParam;
+        switch (msgId) {
+            case WIM_MSG_PROGRESS: {
+                // Best-effort percent reporting using wParam
+                unsigned long percent = static_cast<unsigned long>(wParam);
+                char buf[64]; _snprintf_s(buf, sizeof(buf), _TRUNCATE, "WIM progress: %lu", percent);
+                OutputDebugStringA(buf);
+                break;
+            }
+            case WIM_MSG_PROCESS: {
+                OutputDebugStringA("WIM processing...");
+                break;
+            }
+            case WIM_MSG_ERROR: {
+                OutputDebugStringA("WIM error reported");
+                break;
+            }
+            case WIM_MSG_INFO: {
+                OutputDebugStringA("WIM info");
+                break;
+            }
+            default: break;
+        }
+        return WIM_MSG_SUCCESS;
+    }
+
+    bool tryWimApply(const std::wstring& wimPath, int imageIndex, const std::wstring& dest) {
+        DWORD createResult = 0;
+        HANDLE hwim = WIMCreateFile(wimPath.c_str(), GENERIC_READ, OPEN_EXISTING, 0, 0, &createResult);
+        if (!hwim) {
+            lastError = "WIMCreateFile failed: " + std::to_string(GetLastError());
+            return false;
+        }
+        // Temp path from env override
+        wchar_t tempBuf[MAX_PATH] = {};
+        DWORD n = GetEnvironmentVariableW(L"DISMV2_WIM_TEMP", tempBuf, MAX_PATH);
+        if (n > 0 && n < MAX_PATH) {
+            WIMSetTemporaryPath(hwim, tempBuf);
+        }
+        // Integrity check toggle (default on)
+        DWORD verify = 1;
+        wchar_t verBuf[8] = {};
+        n = GetEnvironmentVariableW(L"DISMV2_WIM_VERIFY", verBuf, 8);
+        if (n > 0 && n < 8) {
+            if (verBuf[0] == L'0') verify = 0; else verify = 1;
+        }
+        WIMSetIntegrityCheck(hwim, verify);
+
+        WIMRegisterMessageCallback(hwim, &WimMsgCb, this);
+
+        HANDLE hImage = WIMLoadImage(hwim, imageIndex);
+        if (!hImage) {
+            lastError = "WIMLoadImage failed: " + std::to_string(GetLastError());
+            WIMUnregisterMessageCallback(hwim, &WimMsgCb);
+            WIMCloseHandle(hwim);
+            return false;
+        }
+        BOOL ok = WIMApplyImage(hImage, dest.c_str(), 0);
+        DWORD gle = GetLastError();
+        WIMCloseHandle(hImage);
+        WIMUnregisterMessageCallback(hwim, &WimMsgCb);
+        WIMCloseHandle(hwim);
+        if (!ok) {
+            lastError = "WIMApplyImage failed: " + std::to_string(gle);
+            return false;
+        }
+        return true;
+    }
+
+    bool tryWimCapture(const std::wstring& src, const std::wstring& wimPath, const std::wstring& name, const std::wstring& description, WimCompression compression) {
+        DWORD createResult = 0;
+        DWORD comp = WIM_COMPRESS_LZX;
+        if (compression == WimCompression::Xpress) comp = WIM_COMPRESS_XPRESS;
+        else if (compression == WimCompression::LZMS) comp = WIM_COMPRESS_LZMS;
+        HANDLE hwim = WIMCreateFile(wimPath.c_str(), GENERIC_WRITE, CREATE_ALWAYS, 0, comp, &createResult);
+        if (!hwim) {
+            lastError = "WIMCreateFile(write) failed: " + std::to_string(GetLastError());
+            return false;
+        }
+        wchar_t tempBuf[MAX_PATH] = {};
+        DWORD n = GetEnvironmentVariableW(L"DISMV2_WIM_TEMP", tempBuf, MAX_PATH);
+        if (n > 0 && n < MAX_PATH) {
+            WIMSetTemporaryPath(hwim, tempBuf);
+        }
+        // Enable integrity check for captured WIM
+        WIMSetIntegrityCheck(hwim, 1);
+
+        WIMRegisterMessageCallback(hwim, &WimMsgCb, this);
+
+        HANDLE hImage = WIMCaptureImage(hwim, src.c_str(), 0);
+        if (!hImage) {
+            lastError = "WIMCaptureImage failed: " + std::to_string(GetLastError());
+            WIMUnregisterMessageCallback(hwim, &WimMsgCb);
+            WIMCloseHandle(hwim);
+            return false;
+        }
+        // Optional: set image name/description in XML (requires proper XML blob); leave as no-op for now
+        WIMCloseHandle(hImage);
+        BOOL saved = WIMSaveImage(hwim, NULL, description.c_str());
+        DWORD gle = GetLastError();
+        WIMUnregisterMessageCallback(hwim, &WimMsgCb);
+        WIMCloseHandle(hwim);
+        if (!saved) {
+            lastError = "WIMSaveImage failed: " + std::to_string(gle);
+            return false;
+        }
+        return true;
+    }
+#endif
 
 public:
     bool initialize() {
@@ -186,6 +307,15 @@ public:
     }
 
     bool extractWimImage(const std::string& wimPath, int imageIndex, const std::string& destination) {
+#if WITH_WIMGAPI
+        try {
+            fs::create_directories(destination);
+            std::wstring wWim(wimPath.begin(), wimPath.end());
+            std::wstring wDest(destination.begin(), destination.end());
+            if (tryWimApply(wWim, imageIndex, wDest)) return true;
+            // fall through to DISM
+        } catch (...) { /* fallback */ }
+#endif
         try {
             fs::create_directories(destination);
             std::wstring dism = GetSystemToolPath(L"dism.exe");
@@ -198,14 +328,24 @@ public:
     }
 
     bool captureWimImage(const std::string& sourcePath, const std::string& wimPath, const std::string& imageName, const std::string& description, WimCompression compression) {
+#if WITH_WIMGAPI
+        try {
+            if (!fs::exists(sourcePath)) { lastError = "Source path does not exist: "+sourcePath; return false; }
+            std::wstring wSrc(sourcePath.begin(), sourcePath.end());
+            std::wstring wWim(wimPath.begin(), wimPath.end());
+            std::wstring wName(imageName.begin(), imageName.end());
+            std::wstring wDesc(description.begin(), description.end());
+            if (tryWimCapture(wSrc, wWim, wName, wDesc, compression)) return true;
+        } catch (...) { /* fallback */ }
+#endif
         try {
             if (!fs::exists(sourcePath)) { lastError = "Source path does not exist: "+sourcePath; return false; }
             fs::create_directories(fs::path(wimPath).parent_path());
             std::wstring dism = GetSystemToolPath(L"dism.exe");
             std::wstring wSrc(sourcePath.begin(), sourcePath.end()); std::wstring wWim(wimPath.begin(), wimPath.end());
             std::wstring name(imageName.begin(), imageName.end()); std::wstring desc(description.begin(), description.end());
-            std::wstring comp = L"/Compress:max"; // default LZX-like
-            if (compression == WimCompression::Xpress) comp = L"/Compress:fast"; else if (compression == WimCompression::LZX) comp = L"/Compress:max"; else if (compression == WimCompression::LZMS) comp = L"/Compress:max"; // Note: LZMS requires ESD, not WIM
+            std::wstring comp = L"/Compress:max";
+            if (compression == WimCompression::Xpress) comp = L"/Compress:fast"; else if (compression == WimCompression::LZX) comp = L"/Compress:max"; else if (compression == WimCompression::LZMS) comp = L"/Compress:recovery"; // ESD-like
             std::wstring cmd = L"\"" + dism + L"\" /English /Capture-Image /ImageFile:\"" + wWim + L"\" /CaptureDir:\"" + wSrc + L"\" /Name:\"" + name + L"\" /Description:\"" + desc + L"\" " + comp + L" /CheckIntegrity";
             std::string out; DWORD code=1; if (!RunProcessCapture(cmd, 2*60*60*1000, out, code)) { lastError = "Failed to run DISM"; return false; }
             if (code != 0) { lastError = std::string("DISM Capture-Image failed: ") + out; return false; }

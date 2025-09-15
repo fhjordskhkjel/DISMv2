@@ -20,6 +20,11 @@ namespace {
         std::string logPath;
         std::string timeoutMs;
         bool verbose = false;
+        // WIM-specific options
+        bool wimVerifySet = false;
+        bool wimVerify = true;
+        std::string wimTemp;
+        bool wimProgress = false;
     } g_opts;
 
     // Resolve package path: absolute, search exe dir if needed
@@ -103,6 +108,16 @@ namespace {
         if (!g_opts.timeoutMs.empty()) {
             SetEnvironmentVariableA("DISMV2_TIMEOUT_MS", g_opts.timeoutMs.c_str());
         }
+        // WIM-specific env
+        if (g_opts.wimVerifySet) {
+            SetEnvironmentVariableA("DISMV2_WIM_VERIFY", g_opts.wimVerify ? "1" : "0");
+        }
+        if (!g_opts.wimTemp.empty()) {
+            SetEnvironmentVariableA("DISMV2_WIM_TEMP", g_opts.wimTemp.c_str());
+        }
+        if (g_opts.wimProgress) {
+            SetEnvironmentVariableA("DISMV2_WIM_PROGRESS", "1");
+        }
     }
 
     int parseGlobalOptions(int argc, char* argv[], int startIndex) {
@@ -110,19 +125,16 @@ namespace {
             std::string arg = argv[i];
             if (arg == "--temp-dir" && i + 1 < argc) {
                 g_opts.tempDir = argv[++i];
-                // Validate temp directory path
                 if (g_opts.tempDir.empty()) {
                     std::cerr << "Error: Empty temp directory path provided\n";
                     return 1;
                 }
             } else if (arg == "--log" && i + 1 < argc) {
                 g_opts.logPath = argv[++i];
-                // Validate log file path
                 if (g_opts.logPath.empty()) {
                     std::cerr << "Error: Empty log file path provided\n";
                     return 1;
                 }
-                // Check if parent directory exists for log file
                 try {
                     fs::path logPath(g_opts.logPath);
                     fs::path parentDir = logPath.parent_path();
@@ -136,24 +148,31 @@ namespace {
                 g_opts.timeoutMs = argv[++i];
             } else if (arg == "--verbose") {
                 g_opts.verbose = true;
+            } else if (arg == "--wim-verify") {
+                g_opts.wimVerifySet = true; g_opts.wimVerify = true;
+            } else if (arg == "--wim-no-verify") {
+                g_opts.wimVerifySet = true; g_opts.wimVerify = false;
+            } else if (arg == "--wim-temp" && i + 1 < argc) {
+                g_opts.wimTemp = argv[++i];
+            } else if (arg == "--wim-progress") {
+                g_opts.wimProgress = true;
             }
         }
         return 0;
     }
 
-    // Compute drive root for current Windows (e.g., "C:\")
+    // Compute drive root for current Windows (e.g., "C:\\")
     std::string getSystemDriveRoot() {
         char winDir[MAX_PATH] = {};
         UINT n = GetWindowsDirectoryA(winDir, MAX_PATH);
         if (n == 0 || n >= MAX_PATH) return "C:\\";
-        // Extract drive like "C:" and ensure it ends with backslash
         std::string drive;
         if (winDir[0] && winDir[1] == ':') {
             drive.assign(winDir, winDir + 2);
         } else {
             drive = "C:";
         }
-        if (drive.back() != '\\') drive.push_back('\\');
+        if (!drive.empty() && drive.back() != '\\') drive.push_back('\\');
         return drive;
     }
 }
@@ -204,6 +223,9 @@ void printUsage() {
     std::cout << "  --target-system                     - Analyze against current system\n";
     std::cout << "  --output-plan <file>                - Output installation plan to file\n";
     std::cout << "  --performance-mode                  - Enable performance optimizations\n";
+    std::cout << "  --wim-verify | --wim-no-verify      - Enable/disable WIM integrity verification (default: on)\n";
+    std::cout << "  --wim-temp <path>                   - Set temporary path for WIM operations\n";
+    std::cout << "  --wim-progress                      - Log WIM progress to console\n";
 }
 
 // Parse package intelligence arguments
