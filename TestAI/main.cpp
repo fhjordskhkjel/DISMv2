@@ -11,6 +11,7 @@
 #include "CbsManager.h"
 #include "PsfWimHandler.h"
 #include "DismApiWrapper.h"
+#include "OfflineRegistry.h"
 #define NOMINMAX
 #include <windows.h>
 #include <chrono>
@@ -1453,7 +1454,7 @@ int main(int argc, char* argv[]) {
             for (int i = 3; i < argc; ++i) { std::string a = argv[i]; if (a == "/Online") opt.online=true; else if (a == "/Offline") opt.online=false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} else if (a == "--json") json = true; }
             DismApiWrapper dism; std::string out; DWORD code=1; auto t0=std::chrono::high_resolution_clock::now();
             bool ok = dism.removeProvisionedAppx(name, opt, out, code);
-            auto t1=std::chrono::high_resolution_clock::now(); auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
+            auto t1 = std::chrono::high_resolution_clock::now(); auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
             if (json) { std::ostringstream js; js << "{\"command\":\"remove-provisioned-appx\",\"package\":\""<<name<<"\",\"success\":"<<((ok&&code==0)?"true":"false")<<",\"exitCode\":"<<code<<",\"durationMs\":"<<ms<<"}"; std::cout<<js.str()<<"\n"; return (ok&&code==0)?0:1; }
             if (!ok || code != 0) { std::cerr << "[FAILED] Remove-ProvisionedAppxPackage failed (code "<<code<<")\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
             std::cout << "[SUCCESS] Provisioned app removed in " << ms << " ms\n";
@@ -1476,6 +1477,46 @@ int main(int argc, char* argv[]) {
                 std::wcout << L"==== End ====" << L"\n\n";
             };
             for (auto& t : targets) tailFile(t);
+        }
+        else if (command == "offline-reg-load") {
+            if (argc < 3) { std::cerr << "Error: /Image:<path> required\n"; return 1; }
+            std::string image; bool sw=true, sy=true, df=true; bool json=false;
+            for (int i=2;i<argc;++i){ std::string a=argv[i]; if (a.rfind("/Image:",0)==0) image=a.substr(7); else if (a=="--no-software") sw=false; else if (a=="--no-system") sy=false; else if (a=="--no-default") df=false; else if (a=="--json") json=true; }
+            std::string err; auto lr = OfflineRegistry::loadBasicHives(image, sw, sy, df);
+            if (json) { std::cout << "{\"command\":\"offline-reg-load\",\"success\":" << ((lr.softwareLoaded||lr.systemLoaded||lr.defaultLoaded)?"true":"false") << ",\"software\":" << (lr.softwareLoaded?"true":"false") << ",\"system\":" << (lr.systemLoaded?"true":"false") << ",\"default\":" << (lr.defaultLoaded?"true":"false") << "}" << "\n"; return (lr.softwareLoaded||lr.systemLoaded||lr.defaultLoaded)?0:1; }
+            std::cout << "[SUCCESS] Offline hives loaded: SOFTWARE=" << (lr.softwareLoaded?"YES":"NO") << ", SYSTEM=" << (lr.systemLoaded?"YES":"NO") << ", DEFAULT=" << (lr.defaultLoaded?"YES":"NO") << "\n";
+        }
+        else if (command == "offline-reg-unload") {
+            std::string err; OfflineRegistry::unloadBasicHives(err); std::cout << "[SUCCESS] Offline hives unloaded\n";
+        }
+        else if (command == "offline-reg-set") {
+            if (argc < 7) {
+                std::cerr << "Usage: " << argv[0] << " offline-reg-set <SOFTWARE|SYSTEM|DEFAULT> <SubKey> <ValueName> <REG_SZ|REG_DWORD|REG_QWORD> <Value>\n";
+                return 1;
+            }
+            std::string hive=argv[2], sub=argv[3], name=argv[4], type=argv[5], val=argv[6], err;
+            if (!OfflineRegistry::setValue(hive, sub, name, type, val, err)) { std::cerr << "[FAILED] " << err << "\n"; return 1; }
+            std::cout << "[SUCCESS] Value set\n";
+        }
+        else if (command == "offline-set-timezone") {
+            if (argc < 5 || std::string(argv[2]).rfind("/Image:",0)!=0) {
+                std::cerr << "Usage: " << argv[0] << " offline-set-timezone /Image:<path> <TimeZoneId>\n";
+                return 1;
+            }
+            std::string image = std::string(argv[2]).substr(7);
+            std::string tz = argv[3];
+            std::string err; if (!OfflineRegistry::setTimezone(image, tz, err)) { std::cerr << "[FAILED] " << err << "\n"; return 1; }
+            std::cout << "[SUCCESS] Time zone set to '" << tz << "'\n";
+        }
+        else if (command == "offline-set-locale") {
+            if (argc < 5 || std::string(argv[2]).rfind("/Image:",0)!=0) {
+                std::cerr << "Usage: " << argv[0] << " offline-set-locale /Image:<path> <LocaleName>\n";
+                return 1;
+            }
+            std::string image = std::string(argv[2]).substr(7);
+            std::string locale = argv[3];
+            std::string err; if (!OfflineRegistry::setDefaultUserLocale(image, locale, err)) { std::cerr << "[FAILED] " << err << "\n"; return 1; }
+            std::cout << "[SUCCESS] Default user LocaleName set to '" << locale << "'\n";
         }
         else {
             std::cout << "Command '" << command << "' not fully implemented in this demonstration.\n";
