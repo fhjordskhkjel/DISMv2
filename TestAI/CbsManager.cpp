@@ -19,6 +19,8 @@
 #include <mscat.h>
 #include <deque>
 #include <optional>
+#include <thread>
+#include <atomic>
 #include "CabHandler.h"
 #include "PsfWimHandler.h"
 #pragma comment(lib, "wintrust.lib")
@@ -82,6 +84,16 @@ namespace {
         if (!fn) return FALSE;
         if (!fn(GetCurrentProcess(), &isWow64)) return FALSE;
         return isWow64 ? true : false;
+    }
+
+    int GetEnvInt(const char* name, int def) {
+        char buf[32] = {};
+        DWORD n = GetEnvironmentVariableA(name, buf, (DWORD)sizeof(buf));
+        if (n > 0 && n < sizeof(buf)) {
+            char* end = nullptr; long v = strtol(buf, &end, 10);
+            if (v > 0 && v < 1000) return (int)v;
+        }
+        return def;
     }
 
     bool RunProcessCapture(const std::wstring& command, DWORD timeoutMs, std::string& output, DWORD& exitCode) {
@@ -1014,53 +1026,77 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
     std::vector<fs::path> specialComponents; // .appx/.msix/.psf/.wim/.esd
     bool bootFilesChanged = false;
 
-    // Pass 1: manifests and catalogs
-    // ...existing code (unchanged)...
-
-    // Verify/register catalogs
-    // ...existing code (unchanged)...
-
-    // Pass 2: payload
+    // Collect all payload files first (excluding .mum/.cat/specials)
+    std::vector<fs::path> payload;
     ec.clear();
-    fs::recursive_directory_iterator it2(root, fs::directory_options::skip_permission_denied, ec), end;
-    while (!ec && it2 != end) {
-        const fs::directory_entry& entry = *it2;
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+    while (!ec && it != end) {
+        const fs::directory_entry& entry = *it;
         std::error_code fec;
-        if (entry.is_symlink(fec)) { it2.disable_recursion_pending(); it2.increment(ec); continue; }
-        if (fec) { it2.increment(ec); continue; }
-        if (!entry.is_regular_file(fec) || fec) { it2.increment(ec); continue; }
+        if (entry.is_symlink(fec)) { it.disable_recursion_pending(); it.increment(ec); continue; }
+        if (fec) { it.increment(ec); continue; }
+        if (!entry.is_regular_file(fec) || fec) { it.increment(ec); continue; }
         auto ext = entry.path().extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext == ".mum") { ++mumCount; it2.increment(ec); continue; }
-        if (ext == ".cat") { ++catCount; it2.increment(ec); continue; }
+        if (ext == ".mum") { ++mumCount; it.increment(ec); continue; }
+        if (ext == ".cat") { ++catCount; it.increment(ec); continue; }
         if (ext == ".appx" || ext == ".msix" || ext == ".psf" || ext == ".wim" || ext == ".esd") {
-            specialComponents.push_back(entry.path()); it2.increment(ec); continue;
+            specialComponents.push_back(entry.path()); it.increment(ec); continue;
         }
-        auto dstOpt = ComputeDestinationForExtracted(entry.path(), root, target.string());
-        if (!dstOpt) { ++skipped; it2.increment(ec); continue; }
-        if (!IsUnderRootCaseInsensitive(*dstOpt, target)) { ++failed; appendToErrorLog("Path outside target root skipped: " + dstOpt->string()); it2.increment(ec); continue; }
-        std::wstring wsrc = entry.path().wstring();
-        std::wstring wdst = dstOpt->wstring();
-        std::string log;
-        if (CopyFileLongPath(wsrc, wdst, /*overwrite*/true, &log)) {
-            ++copied;
-            // Track if boot-related files changed (Windows\Boot or EFI\Microsoft\Boot)
-            auto wstr = dstOpt->wstring();
-            std::wstring low = wstr; std::transform(low.begin(), low.end(), low.begin(), ::towlower);
-            if (low.find(L"\\windows\\boot\\") != std::wstring::npos || low.find(L"\\efi\\microsoft\\boot\\") != std::wstring::npos) {
-                bootFilesChanged = true;
-            }
-        } else {
-            ++failed;
-            DWORD le = GetLastError();
-            if (le == ERROR_ACCESS_DENIED) {
-                appendToErrorLog("Copy failed (ACCESS DENIED): " + entry.path().string() + " -> " + dstOpt->string() + ". Run elevated or use /Offline /Image.");
-            } else {
-                appendToErrorLog("Copy failed: " + entry.path().string() + " -> " + dstOpt->string() + (log.empty()?"":(" ("+log+")")));
-            }
-        }
-        it2.increment(ec);
+        payload.push_back(entry.path());
+        it.increment(ec);
     }
-    if (ec) appendToErrorLog(std::string("Traversal warning (pass2): ") + ec.message());
+    if (ec) appendToErrorLog(std::string("Traversal warning (collect): ") + ec.message());
+
+    // Parallel copy with bounded workers
+    unsigned int hc = std::thread::hardware_concurrency();
+    int defThreads = (hc == 0 ? 2 : (hc < 2 ? 2 : (hc > 64 ? 64 : (int)hc)));
+    int maxThreads = GetEnvInt("DISMV2_COPY_THREADS", defThreads);
+    if (maxThreads < 1) maxThreads = 1; if (maxThreads > 64) maxThreads = 64;
+    appendToErrorLog("Parallel copy workers: " + std::to_string(maxThreads) + ", files: " + std::to_string(payload.size()));
+
+    std::atomic<size_t> idx{0};
+    std::mutex countersMu;
+
+    auto worker = [&]() {
+        for (;;) {
+            size_t i = idx.fetch_add(1, std::memory_order_relaxed);
+            if (i >= payload.size()) break;
+            const fs::path& src = payload[i];
+            auto dstOpt = ComputeDestinationForExtracted(src, root, target.string());
+            if (!dstOpt) { std::lock_guard<std::mutex> lg(countersMu); ++skipped; continue; }
+            if (!IsUnderRootCaseInsensitive(*dstOpt, target)) {
+                appendToErrorLog("Path outside target root skipped: " + dstOpt->string());
+                std::lock_guard<std::mutex> lg(countersMu); ++failed; continue;
+            }
+            std::wstring wsrc = src.wstring();
+            std::wstring wdst = dstOpt->wstring();
+            std::string log;
+            if (CopyFileLongPath(wsrc, wdst, /*overwrite*/true, &log)) {
+                // Count and boot flag
+                std::lock_guard<std::mutex> lg(countersMu);
+                ++copied;
+                auto wstr = dstOpt->wstring();
+                std::wstring low = wstr; std::transform(low.begin(), low.end(), low.begin(), ::towlower);
+                if (low.find(L"\\windows\\boot\\") != std::wstring::npos || low.find(L"\\efi\\microsoft\\boot\\") != std::wstring::npos) {
+                    bootFilesChanged = true;
+                }
+            } else {
+                DWORD le = GetLastError();
+                if (le == ERROR_ACCESS_DENIED) {
+                    appendToErrorLog("Copy failed (ACCESS DENIED): " + src.string() + " -> " + dstOpt->string() + ". Run elevated or use /Offline /Image.");
+                } else {
+                    appendToErrorLog("Copy failed: " + src.string() + " -> " + dstOpt->string() + (log.empty()?"":(" ("+log+")")));
+                }
+                std::lock_guard<std::mutex> lg(countersMu);
+                ++failed;
+            }
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(maxThreads);
+    for (int t = 0; t < maxThreads; ++t) threads.emplace_back(worker);
+    for (auto& th : threads) th.join();
 
     appendToErrorLog("Manifests (.mum) encountered: " + std::to_string(mumCount));
     appendToErrorLog("Catalogs (.cat) encountered: " + std::to_string(catCount));
@@ -1112,7 +1148,7 @@ bool CbsManager::enableCbsLogging(const std::string& logPath) {
 void CbsManager::setLastError(const std::string& error) {
     lastError = error;
     appendToErrorLog("[ERROR] " + error);
-    // On error, tail logs for context
+    // On error, tail CBS/DISM logs for context
     tailServicingLogs(200);
 }
 
@@ -1418,6 +1454,33 @@ CbsInstallResult CbsManager::installExtractedPackageWithCbs(const std::string& e
         r.success = true; return r;
     } catch (const std::exception& ex) {
         r.errorDescription = ex.what(); r.errorCode = E_UNEXPECTED; return r;
+    }
+}
+
+// ===== CBS log tailing implementation =====
+void CbsManager::tailServicingLogs(int lastLines) {
+    try {
+        if (lastLines <= 0) lastLines = 200;
+        wchar_t windir[MAX_PATH] = {}; GetWindowsDirectoryW(windir, MAX_PATH);
+        std::wstring cbs = std::wstring(windir) + L"\\Logs\\CBS\\CBS.log";
+        std::wstring dism = std::wstring(windir) + L"\\Logs\\DISM\\dism.log";
+
+        auto tailFile = [&](const std::wstring& path){
+            std::wifstream in(path);
+            if (!in.is_open()) {
+                appendToErrorLog(std::string("[WARN] Cannot open: ") + std::string(path.begin(), path.end()));
+                return;
+            }
+            std::deque<std::wstring> ring; std::wstring line;
+            while (std::getline(in, line)) { ring.push_back(line); if ((int)ring.size() > lastLines) ring.pop_front(); }
+            appendToErrorLog(std::string("==== Tail of ") + std::string(path.begin(), path.end()) + " (last " + std::to_string(lastLines) + ") ====");
+            for (auto& l : ring) appendToErrorLog(std::string(l.begin(), l.end()));
+            appendToErrorLog("==== End ====");
+        };
+        tailFile(cbs);
+        tailFile(dism);
+    } catch (...) {
+        // ignore
     }
 }
 
