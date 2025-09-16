@@ -246,6 +246,9 @@ private:
     bool enableRequiredPrivileges();
     bool enableTrustedInstallerPrivileges();
 
+    // Diagnostics
+    void tailServicingLogs(int lastLines);
+
     // Constants for CBS operations
     static constexpr const char* CBS_STORE_PATH = "\\Windows\\servicing\\Packages";
     static constexpr const char* CBS_LOG_PATH = "\\Windows\\Logs\\CBS";

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <filesystem>
 #include <deque>
+#include <regex>
 #include "CabHandler.h"
 #include "PackageSupersedenceManager.h"
 #include "PackageSupersedenceManagerSimple.h"
@@ -32,6 +33,7 @@ namespace {
         bool wimVerify = true;
         std::string wimTemp;
         bool wimProgress = false;
+        bool diagEnabled = false; // NEW: enable diagnostics dump
     } g_opts;
 
     // Resolve package path: absolute, search exe dir if needed
@@ -163,6 +165,10 @@ namespace {
                 g_opts.wimTemp = argv[++i];
             } else if (arg == "--wim-progress") {
                 g_opts.wimProgress = true;
+            } else if (arg == "--diag") {
+                // Diagnostics option, no additional parameters
+                // Just enable the flag
+                g_opts.diagEnabled = true;
             }
         }
         return 0;
@@ -235,6 +241,7 @@ void printUsage() {
     std::cout << "  --wim-verify | --wim-no-verify      - Enable/disable WIM integrity verification (default: on)\n";
     std::cout << "  --wim-temp <path>                   - Set temporary path for WIM operations\n";
     std::cout << "  --wim-progress                      - Log WIM progress to console\n";
+    std::cout << "  --diag                               - Dump OS build, DISM version, servicing stack version\n";
 }
 
 // Parse package intelligence arguments
@@ -1481,65 +1488,66 @@ int main(int argc, char* argv[]) {
             };
             for (auto& t : targets) tailFile(t);
         }
-        else if (command == "offline-reg-load") {
-            if (argc < 3) { std::cerr << "Error: /Image:<path> required\n"; return 1; }
-            std::string image; bool sw=true, sy=true, df=true; bool json=false;
-            for (int i=2;i<argc;++i){ std::string a=argv[i]; if (a.rfind("/Image:",0)==0) image=a.substr(7); else if (a=="--no-software") sw=false; else if (a=="--no-system") sy=false; else if (a=="--no-default") df=false; else if (a=="--json") json=true; }
-            std::string err; auto lr = OfflineRegistry::loadBasicHives(image, sw, sy, df);
-            if (json) { std::cout << "{\"command\":\"offline-reg-load\",\"success\":" << ((lr.softwareLoaded||lr.systemLoaded||lr.defaultLoaded)?"true":"false") << ",\"software\":" << (lr.softwareLoaded?"true":"false") << ",\"system\":" << (lr.systemLoaded?"true":"false") << ",\"default\":" << (lr.defaultLoaded?"true":"false") << "}" << "\n"; return (lr.softwareLoaded||lr.systemLoaded||lr.defaultLoaded)?0:1; }
-            std::cout << "[SUCCESS] Offline hives loaded: SOFTWARE=" << (lr.softwareLoaded?"YES":"NO") << ", SYSTEM=" << (lr.systemLoaded?"YES":"NO") << ", DEFAULT=" << (lr.defaultLoaded?"YES":"NO") << "\n";
-        }
-        else if (command == "offline-reg-unload") {
-            std::string err; OfflineRegistry::unloadBasicHives(err); std::cout << "[SUCCESS] Offline hives unloaded\n";
-        }
-        else if (command == "offline-reg-set") {
-            if (argc < 7) {
-                std::cerr << "Usage: " << argv[0] << " offline-reg-set <SOFTWARE|SYSTEM|DEFAULT> <SubKey> <ValueName> <REG_SZ|REG_DWORD|REG_QWORD> <Value>\n";
-                return 1;
+        else if (command == "diag" || command == "--diag") {
+            // Dump OS, DISM, Servicing Stack versions
+            std::cout << "Diagnostics (--diag)\n";
+            std::cout << "====================\n";
+            // OS build (VersionHelpers alternative): use RtlGetVersion dynamically if available
+            using RtlGetVersionPtr = LONG (WINAPI*)(PRTL_OSVERSIONINFOW);
+            HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+            OSVERSIONINFOW osv{}; osv.dwOSVersionInfoSize = sizeof(osv);
+            if (ntdll) {
+                auto pRtlGetVersion = reinterpret_cast<RtlGetVersionPtr>(GetProcAddress(ntdll, "RtlGetVersion"));
+                if (pRtlGetVersion) {
+                    if (pRtlGetVersion(&osv) == 0) {
+                        std::cout << "OS Version: " << osv.dwMajorVersion << "." << osv.dwMinorVersion << "." << osv.dwBuildNumber << "\n";
+                    }
+                }
             }
-            std::string hive=argv[2], sub=argv[3], name=argv[4], type=argv[5], val=argv[6], err;
-            if (!OfflineRegistry::setValue(hive, sub, name, type, val, err)) { std::cerr << "[FAILED] " << err << "\n"; return 1; }
-            std::cout << "[SUCCESS] Value set\n";
-        }
-        else if (command == "offline-set-timezone") {
-            if (argc < 5 || std::string(argv[2]).rfind("/Image:",0)!=0) {
-                std::cerr << "Usage: " << argv[0] << " offline-set-timezone /Image:<path> <TimeZoneId>\n";
-                return 1;
+            // DISM version via dism.exe /? header
+            try {
+                std::wstring dism = L"dism.exe";
+                std::string out; DWORD code = 1; 
+                auto run = [&](const std::wstring& cmd){
+                    std::string o; DWORD c=1; 
+                    // use local minimal runner via CreateProcess to avoid coupling
+                    STARTUPINFOW si{}; si.cb=sizeof(si);
+                    PROCESS_INFORMATION pi{}; 
+                    SECURITY_ATTRIBUTES sa{}; sa.nLength=sizeof(sa); sa.bInheritHandle=TRUE;
+                    HANDLE r=0,w=0; CreatePipe(&r,&w,&sa,0); SetHandleInformation(r, HANDLE_FLAG_INHERIT, 0);
+                    si.dwFlags = STARTF_USESTDHANDLES; si.hStdOutput=w; si.hStdError=w;
+                    if (CreateProcessW(nullptr, const_cast<wchar_t*>(cmd.c_str()), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+                        CloseHandle(w);
+                        char buf[4096]; DWORD br=0;
+                        for (;;) {
+                            if (!ReadFile(r, buf, sizeof(buf), &br, nullptr) || br==0) break; o.append(buf, buf+br);
+                            DWORD wait = WaitForSingleObject(pi.hProcess, 10);
+                            if (wait==WAIT_OBJECT_0) break;
+                        }
+                        WaitForSingleObject(pi.hProcess, INFINITE);
+                        GetExitCodeProcess(pi.hProcess, &c);
+                        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+                    } else {
+                        CloseHandle(r); CloseHandle(w);
+                    }
+                    CloseHandle(r);
+                    return std::make_pair(o,c);
+                };
+                auto p = run(L"\"" + dism + L"\" /?" );
+                std::smatch m; std::regex re("Version:\\s*([0-9.]+)");
+                if (std::regex_search(p.first, m, re)) {
+                    std::cout << "DISM Version: " << m[1].str() << "\n";
+                }
+            } catch (...) {}
+            // Servicing stack version: read from registry (Component Based Servicing\\Version)
+            HKEY h{}; if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Version", 0, KEY_READ, &h) == ERROR_SUCCESS) {
+                wchar_t buf[256]; DWORD cb = sizeof(buf); DWORD type=0;
+                if (RegQueryValueExW(h, L"Version", nullptr, &type, reinterpret_cast<LPBYTE>(buf), &cb) == ERROR_SUCCESS && (type==REG_SZ)) {
+                    std::wcout << L"Servicing Stack Version: " << buf << L"\n";
+                }
+                RegCloseKey(h);
             }
-            std::string image = std::string(argv[2]).substr(7);
-            std::string tz = argv[3];
-            std::string err; if (!OfflineRegistry::setTimezone(image, tz, err)) { std::cerr << "[FAILED] " << err << "\n"; return 1; }
-            std::cout << "[SUCCESS] Time zone set to '" << tz << "'\n";
-        }
-        else if (command == "offline-set-locale") {
-            if (argc < 5 || std::string(argv[2]).rfind("/Image:",0)!=0) {
-                std::cerr << "Usage: " << argv[0] << " offline-set-locale /Image:<path> <LocaleName>\n";
-                return 1;
-            }
-            std::string image = std::string(argv[2]).substr(7);
-            std::string locale = argv[3];
-            std::string err; if (!OfflineRegistry::setDefaultUserLocale(image, locale, err)) { std::cerr << "[FAILED] " << err << "\n"; return 1; }
-            std::cout << "[SUCCESS] Default user LocaleName set to '" << locale << "'\n";
-        }
-        else if (command == "bcdboot-update") {
-            if (argc < 5) {
-                std::cerr << "Usage: " << argv[0] << " bcdboot-update <WindowsDir> <SystemPartition> [UEFI|BIOS] [--timeout-ms N]" << "\n";
-                return 1;
-            }
-            std::string winDir = argv[2];
-            std::string sysPart = argv[3];
-            BootUtils::FirmwareType fw = BootUtils::FirmwareType::Unknown;
-            if (argc >= 5) {
-                std::string fwArg = argv[4];
-                if (_stricmp(fwArg.c_str(), "UEFI") == 0) fw = BootUtils::FirmwareType::UEFI;
-                else if (_stricmp(fwArg.c_str(), "BIOS") == 0) fw = BootUtils::FirmwareType::BIOS;
-            }
-            DWORD to = g_opts.timeoutMs.empty() ? (DWORD)(5*60*1000) : (DWORD)std::atoi(g_opts.timeoutMs.c_str());
-            std::string out; DWORD code=1;
-            if (!BootUtils::runBcdBoot(winDir, sysPart, fw, to, out, code)) { std::cerr << "[FAILED] Failed to spawn bcdboot" << "\n"; return 1; }
-            if (code != 0) { std::cerr << "[FAILED] bcdboot exited with code " << code << "\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
-            std::cout << "[SUCCESS] bcdboot updated boot files" << "\n";
-            if (g_opts.verbose) std::cout << out << "\n";
+            return 0;
         }
         else {
             std::cout << "Command '" << command << "' not fully implemented in this demonstration.\n";

@@ -17,6 +17,8 @@
 #include <wincrypt.h>
 #include <msxml6.h>
 #include <mscat.h>
+#include <deque>
+#include <optional>
 #include "CabHandler.h"
 #include "PsfWimHandler.h"
 #pragma comment(lib, "wintrust.lib")
@@ -158,12 +160,12 @@ namespace {
         return true;
     }
 
-    void RotateLogIfNeeded(const std::string& path, size_t maxBytes = 2 * 1024 * 1024, int keep = 3) {
+    std::optional<std::string> RotateLogIfNeeded(const std::string& path, size_t maxBytes = 2 * 1024 * 1024, int keep = 3) {
         try {
-            if (path.empty()) return;
+            if (path.empty()) return std::nullopt;
             std::error_code ec;
             auto sz = fs::exists(path, ec) ? fs::file_size(path, ec) : 0;
-            if (ec || sz < maxBytes) return;
+            if (ec || sz < maxBytes) return std::nullopt;
             for (int i = keep - 1; i >= 1; --i) {
                 std::string src = path + "." + std::to_string(i);
                 std::string dst = path + "." + std::to_string(i + 1);
@@ -175,7 +177,10 @@ namespace {
             std::string first = path + ".1";
             fs::remove(first, ec);
             fs::rename(path, first, ec);
+            std::ostringstream oss; oss << "[LOG] Rotated log: " << path << " -> " << first;
+            return oss.str();
         } catch (...) {
+            return std::nullopt;
         }
     }
 
@@ -569,20 +574,25 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
         return result;
     }
     
+    auto t_all_start = std::chrono::steady_clock::now();
     try {
         appendToErrorLog("Starting CBS-integrated installation of: " + packagePath);
         appendToErrorLog("Target path: " + targetPath);
         appendToErrorLog("Online mode: " + std::string(isOnline ? "Yes" : "No"));
         
         // 1. Verify package exists
+        auto t0 = std::chrono::steady_clock::now();
         if (!fs::exists(packagePath)) {
             result.errorDescription = "Package file does not exist: " + packagePath;
             result.errorCode = ERROR_FILE_NOT_FOUND;
             appendToErrorLog("CBS installation failed: " + result.errorDescription);
             return result;
         }
+        auto t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: preflight exists check ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         // 2. Create temporary extraction directory
+        t0 = std::chrono::steady_clock::now();
         std::string tempDir;
         if (!createStagingDirectory("", tempDir)) {
             result.errorDescription = "Failed to create staging directory for package extraction";
@@ -590,11 +600,13 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
             appendToErrorLog("CBS installation failed: " + result.errorDescription);
             return result;
         }
-        
         appendToErrorLog("Created staging directory: " + tempDir);
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: create staging ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         // 3. Extract package
         appendToErrorLog("Extracting package for analysis...");
+        t0 = std::chrono::steady_clock::now();
         bool extractionSuccess = false;
         try {
             auto extension = fs::path(packagePath).extension().string();
@@ -615,6 +627,8 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
             appendToErrorLog("Exception during package extraction: " + std::string(ex.what()));
             extractionSuccess = false;
         }
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: extraction ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         if (!extractionSuccess) {
             appendToErrorLog("Warning: Package extraction failed, using basic analysis");
@@ -624,6 +638,7 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
         
         // 4. Analyze extracted package
         appendToErrorLog("Analyzing package structure...");
+        t0 = std::chrono::steady_clock::now();
         auto packageInfo = extractionSuccess ? 
             analyzeExtractedPackage(tempDir) : 
             analyzePackage(packagePath);
@@ -635,6 +650,8 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
             cleanupStagingDirectory(tempDir);
             return result;
         }
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: analysis ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         appendToErrorLog("Package analysis successful:");
         appendToErrorLog("  Package ID: " + packageInfo->packageIdentity);
@@ -642,14 +659,18 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
         
         // 5. Verify package signature (non-blocking for internal packages)
         appendToErrorLog("Verifying package signature...");
+        t0 = std::chrono::steady_clock::now();
         if (!verifyPackageSignature(packagePath)) {
             appendToErrorLog("Warning: Package signature verification failed, but continuing installation");
         } else {
             appendToErrorLog("Package signature verification successful");
         }
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: signature verify ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         // 6. Check applicability
         appendToErrorLog("Checking package applicability...");
+        t0 = std::chrono::steady_clock::now();
         if (!checkApplicability(*packageInfo, targetPath)) {
             result.errorDescription = "Package is not applicable to target system";
             result.errorCode = E_INVALIDARG;
@@ -657,9 +678,12 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
             cleanupStagingDirectory(tempDir);
             return result;
         }
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: applicability ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         // 7. Begin transaction
         appendToErrorLog("Beginning CBS transaction...");
+        t0 = std::chrono::steady_clock::now();
         if (!beginTransaction()) {
             result.errorDescription = "Failed to begin CBS transaction: " + (lastError ? *lastError : "Unknown error");
             result.errorCode = E_FAIL;
@@ -667,9 +691,12 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
             cleanupStagingDirectory(tempDir);
             return result;
         }
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: begin transaction ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         // 8. Install package (two-pass: manifests first)
         appendToErrorLog("Installing package components...");
+        t0 = std::chrono::steady_clock::now();
         for (const auto& component : packageInfo->components) {
             appendToErrorLog("  Processing component: " + component.identity);
             // Register component (stub)
@@ -681,9 +708,12 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
                 appendToErrorLog("    Successfully registered component: " + component.identity);
             }
         }
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: register components ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         // 9. Update component store (stub)
         appendToErrorLog("Updating CBS component store...");
+        t0 = std::chrono::steady_clock::now();
         if (!updateComponentStore(targetPath)) {
             result.errorDescription = "Failed to update component store";
             result.errorCode = E_FAIL;
@@ -692,9 +722,12 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
             cleanupStagingDirectory(tempDir);
             return result;
         }
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: update component store ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         // 10. Commit transaction
         appendToErrorLog("Committing CBS transaction...");
+        t0 = std::chrono::steady_clock::now();
         transactionState = CbsTransactionState::Staged;
         if (!commitTransaction()) {
             result.errorDescription = "Failed to commit CBS transaction: " + (lastError ? *lastError : "Unknown error");
@@ -703,15 +736,23 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
             cleanupStagingDirectory(tempDir);
             return result;
         }
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: commit transaction ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         // 11. Notify servicing stack
         if (isOnline) {
             appendToErrorLog("Notifying Windows servicing stack...");
+            t0 = std::chrono::steady_clock::now();
             notifyServicingStack(result.installedComponents);
+            t1 = std::chrono::steady_clock::now();
+            appendToErrorLog("Phase: servicing notify ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         }
         
         // 12. Cleanup staging directory
+        t0 = std::chrono::steady_clock::now();
         cleanupStagingDirectory(tempDir);
+        t1 = std::chrono::steady_clock::now();
+        appendToErrorLog("Phase: cleanup staging ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         result.success = true;
         result.needsRestart = std::any_of(packageInfo->components.begin(), 
@@ -728,7 +769,11 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
         result.errorCode = E_UNEXPECTED;
         appendToErrorLog("CBS installation failed with exception: " + result.errorDescription);
         rollbackTransaction();
+        // Auto tail CBS/DISM logs on failure (last 200 lines)
+        tailServicingLogs(200);
     }
+    auto t_all_end = std::chrono::steady_clock::now();
+    appendToErrorLog("Total duration ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t_all_end - t_all_start).count()));
     
     return result;
 }
@@ -964,6 +1009,7 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
     }
 
     size_t copied = 0, skipped = 0, failed = 0;
+    size_t mumCount = 0, catCount = 0;
     std::vector<fs::path> copiedCatalogTargets;
     std::vector<fs::path> specialComponents; // .appx/.msix/.psf/.wim/.esd
     bool bootFilesChanged = false;
@@ -984,7 +1030,8 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         if (fec) { it2.increment(ec); continue; }
         if (!entry.is_regular_file(fec) || fec) { it2.increment(ec); continue; }
         auto ext = entry.path().extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext == ".mum" || ext == ".cat") { it2.increment(ec); continue; }
+        if (ext == ".mum") { ++mumCount; it2.increment(ec); continue; }
+        if (ext == ".cat") { ++catCount; it2.increment(ec); continue; }
         if (ext == ".appx" || ext == ".msix" || ext == ".psf" || ext == ".wim" || ext == ".esd") {
             specialComponents.push_back(entry.path()); it2.increment(ec); continue;
         }
@@ -1014,6 +1061,19 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         it2.increment(ec);
     }
     if (ec) appendToErrorLog(std::string("Traversal warning (pass2): ") + ec.message());
+
+    appendToErrorLog("Manifests (.mum) encountered: " + std::to_string(mumCount));
+    appendToErrorLog("Catalogs (.cat) encountered: " + std::to_string(catCount));
+    appendToErrorLog("Special components queued (.appx/.msix/.psf/.wim/.esd): " + std::to_string(specialComponents.size()));
+    if (!specialComponents.empty()) {
+        size_t preview = std::min<size_t>(specialComponents.size(), 5);
+        for (size_t i = 0; i < preview; ++i) {
+            appendToErrorLog("  - " + specialComponents[i].string());
+        }
+        if (specialComponents.size() > preview) {
+            appendToErrorLog("  ... (" + std::to_string(specialComponents.size() - preview) + ") more");
+        }
+    }
 
     // Process PSF/WIM/ESD via handler
     // ...existing code (unchanged)...
@@ -1052,6 +1112,8 @@ bool CbsManager::enableCbsLogging(const std::string& logPath) {
 void CbsManager::setLastError(const std::string& error) {
     lastError = error;
     appendToErrorLog("[ERROR] " + error);
+    // On error, tail logs for context
+    tailServicingLogs(200);
 }
 
 void CbsManager::appendToErrorLog(const std::string& logEntry) {
@@ -1059,7 +1121,10 @@ void CbsManager::appendToErrorLog(const std::string& logEntry) {
     errorLog.append(logEntry).append("\n");
     if (logFilePath && !logFilePath->empty()) {
         try {
-            RotateLogIfNeeded(*logFilePath);
+            if (auto rot = RotateLogIfNeeded(*logFilePath)) {
+                std::ofstream f(*logFilePath, std::ios::app | std::ios::binary);
+                if (f.is_open()) f << *rot << "\n";
+            }
             std::ofstream f(*logFilePath, std::ios::app | std::ios::binary);
             if (f.is_open()) f << logEntry << "\n";
         } catch (...) {}
