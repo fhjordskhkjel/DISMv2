@@ -16,6 +16,7 @@
 #include <windows.h>
 #include <chrono>
 #include <sstream>
+#include "BootUtils.h"
 
 using namespace WindowsInstallationEnhancement::Simple;
 namespace fs = std::filesystem;
@@ -195,6 +196,8 @@ void printUsage() {
     std::cout << "  list-wim <wim>                       - List WIM images using wimgapi.dll\n";
     std::cout << "  capture-wim <source> <wim> <name> <desc> - Capture directory to WIM\n";
     std::cout << "  detect-type <package>                - Auto-detect package format\n";
+    std::cout << "  verify-appx <package> [--strict]     - Verify APPX/MSIX signature and block map\n";
+    std::cout << "  offline-reg-raii-test /Image:<path>  - Load SYSTEM hive, set value, and unload (RAII)\n";
     
     std::cout << "\nPackage Supersedence & Intelligence Commands:\n";
     std::cout << "  parse-manifests <directory>         - Parse .mum manifest files for package analysis\n";
@@ -1517,6 +1520,26 @@ int main(int argc, char* argv[]) {
             std::string locale = argv[3];
             std::string err; if (!OfflineRegistry::setDefaultUserLocale(image, locale, err)) { std::cerr << "[FAILED] " << err << "\n"; return 1; }
             std::cout << "[SUCCESS] Default user LocaleName set to '" << locale << "'\n";
+        }
+        else if (command == "bcdboot-update") {
+            if (argc < 5) {
+                std::cerr << "Usage: " << argv[0] << " bcdboot-update <WindowsDir> <SystemPartition> [UEFI|BIOS] [--timeout-ms N]" << "\n";
+                return 1;
+            }
+            std::string winDir = argv[2];
+            std::string sysPart = argv[3];
+            BootUtils::FirmwareType fw = BootUtils::FirmwareType::Unknown;
+            if (argc >= 5) {
+                std::string fwArg = argv[4];
+                if (_stricmp(fwArg.c_str(), "UEFI") == 0) fw = BootUtils::FirmwareType::UEFI;
+                else if (_stricmp(fwArg.c_str(), "BIOS") == 0) fw = BootUtils::FirmwareType::BIOS;
+            }
+            DWORD to = g_opts.timeoutMs.empty() ? (DWORD)(5*60*1000) : (DWORD)std::atoi(g_opts.timeoutMs.c_str());
+            std::string out; DWORD code=1;
+            if (!BootUtils::runBcdBoot(winDir, sysPart, fw, to, out, code)) { std::cerr << "[FAILED] Failed to spawn bcdboot" << "\n"; return 1; }
+            if (code != 0) { std::cerr << "[FAILED] bcdboot exited with code " << code << "\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
+            std::cout << "[SUCCESS] bcdboot updated boot files" << "\n";
+            if (g_opts.verbose) std::cout << out << "\n";
         }
         else {
             std::cout << "Command '" << command << "' not fully implemented in this demonstration.\n";

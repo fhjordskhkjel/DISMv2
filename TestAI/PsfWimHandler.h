@@ -66,6 +66,11 @@ public:
                         const std::string& imageName, const std::string& description,
                         WimCompression compression = WimCompression::LZX);
 
+    // Security/verification for APPX/MSIX
+    // Strict timestamp check uses WinVerifyTrust with WTD_REVOKE_WHOLECHAIN and WTD_LIFETIME_SIGNING if requested.
+    bool verifyAppxSignature(const std::string& packagePath, bool strictTimestamp, std::string& err);
+    bool verifyAppxBlockMap(const std::string& packagePath, std::string& err);
+
     // Error handling
     std::string getLastError() const;
 

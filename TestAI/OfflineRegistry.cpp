@@ -137,3 +137,64 @@ bool OfflineRegistry::setDefaultUserLocale(const std::string& imageRoot, const s
     std::string tmp; unloadBasicHives(tmp);
     return ok;
 }
+
+// ===== RegistryHive implementation =====
+
+bool RegistryHive::load(std::string& err) {
+    if (_loaded) return true;
+    if (_mount.empty() || _hivePath.empty() || !_root) { err = "RegistryHive not configured"; return false; }
+    std::string perr; if (!OfflineRegistry::enableBackupRestorePrivileges(perr)) { err = perr; return false; }
+    LONG rc = RegLoadKeyW(_root, _mount.c_str(), _hivePath.c_str());
+    if (rc != ERROR_SUCCESS) {
+        // If already loaded, mark as loaded
+        if (rc == ERROR_ACCESS_DENIED) {
+            // Could be policy; still not loaded
+        }
+        err = "RegLoadKeyW failed: " + std::to_string(rc);
+        return false;
+    }
+    _loaded = true; return true;
+}
+
+bool RegistryHive::unload(std::string& err) {
+    if (!_loaded) return true;
+    LONG rc = RegUnLoadKeyW(_root, _mount.c_str());
+    if (rc != ERROR_SUCCESS) { err = "RegUnLoadKeyW failed: " + std::to_string(rc); return false; }
+    _loaded = false; return true;
+}
+
+void RegistryHive::unloadNoThrow() noexcept {
+    if (_loaded) {
+        RegUnLoadKeyW(_root, _mount.c_str());
+        _loaded = false;
+    }
+}
+
+LONG RegistryHive::createKey(const std::wstring& relativeSubKey, REGSAM samDesired, HKEY& hKeyOut) const {
+    if (!_loaded) return ERROR_INVALID_HANDLE;
+    std::wstring sub = _mount + (relativeSubKey.empty() ? L"" : L"\\" + relativeSubKey);
+    return RegCreateKeyExW(_root, sub.c_str(), 0, nullptr, 0, samDesired, nullptr, &hKeyOut, nullptr);
+}
+
+bool RegistryHive::setString(const std::wstring& relativeSubKey, const std::wstring& valueName, const std::wstring& data, std::string& err) const {
+    HKEY h{}; LONG rc = createKey(relativeSubKey, KEY_SET_VALUE, h);
+    if (rc != ERROR_SUCCESS) { err = "RegCreateKeyExW failed: " + std::to_string(rc); return false; }
+    rc = RegSetValueExW(h, valueName.c_str(), 0, REG_SZ, reinterpret_cast<const BYTE*>(data.c_str()), (DWORD)((data.size()+1)*sizeof(wchar_t)));
+    RegCloseKey(h);
+    if (rc != ERROR_SUCCESS) { err = "RegSetValueExW failed: " + std::to_string(rc); return false; }
+    return true;
+}
+
+bool RegistryHive::setDword(const std::wstring& relativeSubKey, const std::wstring& valueName, DWORD data, std::string& err) const {
+    HKEY h{}; LONG rc = createKey(relativeSubKey, KEY_SET_VALUE, h);
+    if (rc != ERROR_SUCCESS) { err = "RegCreateKeyExW failed: " + std::to_string(rc); return false; }
+    rc = RegSetValueExW(h, valueName.c_str(), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&data), sizeof(data));
+    RegCloseKey(h);
+    if (rc != ERROR_SUCCESS) { err = "RegSetValueExW failed: " + std::to_string(rc); return false; }
+    return true;
+}
+
+std::wstring RegistryHive::fullMountedPath(const std::wstring& relative) const {
+    std::wstring base = _mount;
+    if (!relative.empty()) return base + L"\\" + relative; else return base;
+}
