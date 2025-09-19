@@ -3,6 +3,34 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
 [![Platform](https://img.shields.io/badge/platform-windows-lightgrey)](https://github.com/fhjordskhkjel/DISMv2)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/fhjordskhkjel/DISMv2)
+
+## 🚀 Development Progress & Status
+
+**Current Release:** v1.2.0 (Enhanced Kernel Driver Integration)  
+**Last Updated:** September 2024
+
+### ✅ Completed Features
+- **✅ Kernel-Mode Driver**: Production-ready minifilter driver with enhanced security
+- **✅ File System Monitoring**: Real-time file operations tracking via minifilter
+- **✅ Process Monitoring**: Kernel-level process creation/termination callbacks
+- **✅ Registry Protection**: Comprehensive registry monitoring and protection
+- **✅ Driver Communication**: Secure user-mode to kernel-mode communication
+- **✅ Memory Protection**: Advanced memory injection detection and prevention
+- **✅ Configuration System**: Flexible JSON-based configuration management
+- **✅ Threat Analysis**: Intelligent threat level assessment and rule engine
+- **✅ BSOD Prevention**: Enhanced driver stability with comprehensive error handling
+
+### 🔄 In Progress
+- **✅ GUI Configuration Tool**: Windows Forms application for easy configuration (NEW!)
+- **🔄 Network Monitoring**: Extended network traffic analysis capabilities
+- **🔄 Automated Testing**: Comprehensive test suite for all components
+
+### 📋 Planned Features
+- **📋 Real-time Dashboard**: Web-based monitoring interface
+- **📋 Enterprise Management**: Centralized policy management
+- **📋 Machine Learning**: AI-powered threat detection
+- **📋 Cloud Integration**: Cloud-based threat intelligence
 
 ## Advanced HIPS (Host Intrusion Prevention System)
 
@@ -127,7 +155,17 @@ AdvancedHIPS.sln
 #### User-Mode Application
 1. Build the project using instructions above
 2. Run `hips.exe` as Administrator
-3. Configure using `config/hips_config.json`
+3. Configure using `config/hips_config.json` or the new **GUI Configuration Tool**
+
+**GUI Configuration Tool (NEW!):**
+```batch
+# Navigate to GUI directory
+cd hips\gui
+
+# Build and run the configuration tool
+dotnet build --configuration Release
+dotnet run
+```
 
 **Note**: For production deployment, obtain a valid code signing certificate and sign the driver.
 
@@ -209,6 +247,76 @@ The HIPS system protects against:
 - Process injection and privilege escalation
 - Network-based attacks and data exfiltration
 - Registry-based persistence mechanisms
+
+## Performance Considerations
+
+The HIPS system is designed for minimal performance impact:
+
+- **Intelligent Filtering**: Only monitor relevant events
+- **Optimized Callbacks**: Fast event processing
+- **Resource Management**: Automatic cleanup and memory management
+- **Configurable Sensitivity**: Adjust monitoring levels based on needs
+
+## Troubleshooting
+
+### Common Issues
+
+#### Driver Installation Issues
+- **Problem**: Driver fails to install with "Driver is not digitally signed" error
+- **Solution**: Enable test signing mode or obtain a valid code signing certificate
+  ```batch
+  # Enable test signing (requires reboot)
+  bcdedit /set testsigning on
+  ```
+
+#### Driver Won't Start
+- **Problem**: `sc start HipsDriver` returns error
+- **Solutions**:
+  1. Check if driver is properly installed: `sc query HipsDriver`
+  2. Verify kernel driver files are in correct location
+  3. Check Event Viewer for detailed error messages
+  4. Ensure running as Administrator
+
+#### BSOD or System Instability
+- **Problem**: Blue Screen of Death when driver is loaded
+- **Prevention**: Enhanced driver stability implemented with:
+  - Comprehensive buffer validation
+  - Exception handling around user buffer access
+  - Memory leak prevention
+  - Proper IRQL level management
+- **Solution**: Boot in safe mode and remove driver if issues persist
+
+#### High CPU Usage
+- **Problem**: HIPS system consuming too much CPU
+- **Solutions**:
+  1. Adjust scan intervals in configuration
+  2. Exclude non-critical file extensions
+  3. Reduce monitoring scope in `hips_config.json`
+
+#### Configuration Not Applied
+- **Problem**: Changes to configuration file not taking effect
+- **Solutions**:
+  1. Restart HIPS service after configuration changes
+  2. Verify JSON syntax is valid
+  3. Check file permissions on configuration file
+  4. Use the new **HIPS Configuration Tool** for easier management:
+     ```bash
+     cd hips/gui
+     dotnet run --configuration Release
+     ```
+
+### HIPS Configuration Tool Features
+The new configuration tool provides:
+- **Interactive Menu System**: Easy navigation through configuration options
+- **Real-time Settings Management**: Modify general and monitoring settings
+- **Driver Status Control**: Start, stop, and restart the HIPS driver
+- **Configuration Preview**: View complete configuration in formatted JSON
+- **Cross-platform Support**: Works on Windows and Linux (console mode)
+
+### Getting Help
+- 📖 [Complete Documentation](hips/docs/README.md)
+- 🐛 [Report Issues](https://github.com/fhjordskhkjel/DISMv2/issues)
+- 💬 [Community Discussions](https://github.com/fhjordskhkjel/DISMv2/discussions)
 
 ## Performance Considerations
 
