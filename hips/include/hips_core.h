@@ -64,6 +64,10 @@ class ConfigManager;
 class LogManager;
 class AlertManager;
 
+#ifdef HIPS_KERNEL_DRIVER_SUPPORT
+class DriverInterface;
+#endif
+
 // Event types
 enum class EventType {
     FILE_ACCESS,
@@ -168,6 +172,18 @@ private:
     std::unique_ptr<ConfigManager> config_manager_;
     std::unique_ptr<LogManager> log_manager_;
     std::unique_ptr<AlertManager> alert_manager_;
+    
+#ifdef HIPS_KERNEL_DRIVER_SUPPORT
+    // Kernel driver interface for enhanced monitoring
+    std::unique_ptr<DriverInterface> driver_interface_;
+    std::thread driver_event_thread_;
+    std::atomic<bool> driver_monitoring_enabled_;
+    
+    // Driver event processing
+    void ProcessDriverEvents();
+    void StartDriverEventProcessing();
+    void StopDriverEventProcessing();
+#endif
 
     // State management
     std::atomic<bool> running_;
