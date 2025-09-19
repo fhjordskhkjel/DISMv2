@@ -8,6 +8,12 @@
 #include <functional>
 #include <atomic>
 #include <mutex>
+#include <chrono>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace HIPS {
 
@@ -21,7 +27,11 @@ enum class SelfProtectionEventType {
     DEBUG_ATTEMPT,
     MEMORY_MANIPULATION_ATTEMPT,
     CONFIG_MODIFICATION_ATTEMPT,
-    DRIVER_UNLOAD_ATTEMPT
+    DRIVER_UNLOAD_ATTEMPT,
+    THREAD_MANIPULATION_ATTEMPT,
+    HANDLE_MANIPULATION_ATTEMPT,
+    CRITICAL_SECTION_VIOLATION,
+    KERNEL_MODE_TRANSITION_ATTEMPT
 };
 
 // Self-protection action types
@@ -66,6 +76,9 @@ struct SelfProtectionConfig {
     bool debug_protection_enabled = true;
     bool service_protection_enabled = true;
     bool config_protection_enabled = true;
+    bool thread_protection_enabled = true;
+    bool handle_protection_enabled = true;
+    bool seh_protection_enabled = true;  // Structured Exception Handling
     
     // Protected resources
     std::vector<std::string> protected_files;
@@ -81,6 +94,15 @@ struct SelfProtectionConfig {
     bool auto_quarantine_attackers = false;
     bool terminate_attacking_process = false;
     uint32_t max_protection_events_per_minute = 100;
+    
+    // BSOD prevention settings
+    bool safe_mode_enabled = true;           // Enable safe API operation mode
+    bool graceful_degradation = true;        // Fallback when APIs fail
+    uint32_t max_api_retry_attempts = 3;     // Max retries for failed API calls
+    uint32_t api_timeout_ms = 5000;          // Timeout for API calls
+    bool validate_handles = true;            // Validate handles before use
+    bool check_thread_integrity = true;      // Verify thread integrity
+    bool monitor_critical_sections = true;   // Monitor critical section violations
 };
 
 // Main self-protection engine
@@ -138,6 +160,18 @@ public:
     bool CheckFileIntegrity();
     bool CheckRegistryIntegrity();
     bool CheckServiceIntegrity();
+    bool CheckThreadIntegrity();
+    bool CheckHandleIntegrity();
+    bool CheckCriticalSectionIntegrity();
+
+    // BSOD-proof enhanced protection
+    bool SafeTerminateProcess(DWORD pid);
+    bool SafeOpenProcess(DWORD pid, DWORD access, HANDLE& process_handle);
+    bool SafeCloseHandle(HANDLE handle);
+    bool ValidateProcessHandle(HANDLE process);
+    bool ValidateThreadHandle(HANDLE thread);
+    bool CheckProcessIsAlive(DWORD pid);
+    bool CheckThreadIsAlive(DWORD tid);
 
 private:
     std::atomic<bool> running_;
@@ -162,6 +196,9 @@ private:
     void SetupMemoryProtection();
     void SetupDebugProtection();
     void SetupServiceProtection();
+    void SetupThreadProtection();
+    void SetupHandleProtection();
+    void SetupSEHProtection();
     
     // Event processing
     void ProcessProtectionEvent(const SelfProtectionEvent& event);
@@ -184,13 +221,73 @@ private:
     bool VerifyCodeSignature(const std::string& file_path);
     bool VerifyFileHash(const std::string& file_path, const std::string& expected_hash);
     
+    // BSOD-proof API wrappers
+    template<typename T>
+    bool SafeExecuteAPICall(const std::string& api_name, T&& function, int max_retries = 3) {
+        if (!config_.safe_mode_enabled) {
+            try {
+                return function();
+            } catch (...) {
+                LogSafetyViolation(api_name, "Exception caught in non-safe mode");
+                return false;
+            }
+        }
+        
+        int retries = max_retries;
+        while (retries > 0) {
+            try {
+                return function();
+            } catch (const std::exception& e) {
+                retries--;
+                LogSafetyViolation(api_name, std::string("Exception: ") + e.what() + ", retries left: " + std::to_string(retries));
+                
+                if (retries > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            } catch (...) {
+                retries--;
+                LogSafetyViolation(api_name, "Unknown exception, retries left: " + std::to_string(retries));
+                
+                if (retries > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    bool SafeGetProcessInformation(DWORD pid, std::string& process_name, std::string& process_path);
+    bool SafeGetThreadInformation(DWORD tid, DWORD& owner_pid, bool& is_system_thread);
+    bool IsSystemCriticalProcess(DWORD pid);
+    bool IsSystemCriticalThread(DWORD tid);
+    void LogSafetyViolation(const std::string& operation, const std::string& reason);
+    
 #ifdef _WIN32
+    // SEH (Structured Exception Handling) wrapper
+    template<typename T>
+    bool ExecuteWithSEH(T&& function, const std::string& operation_name) {
+        if (!config_.seh_protection_enabled) {
+            return function();
+        }
+        
+        __try {
+            return function();
+        }
+        __except (SelfProtectionSEHFilter(GetExceptionInformation())) {
+            LogSafetyViolation(operation_name, "SEH exception caught and handled");
+            return false;
+        }
+    }
+    
     // Windows-specific protection
     void SetupWindowsProcessProtection();
     void SetupWindowsFileProtection();
     void SetupWindowsRegistryProtection();
     void SetupWindowsDebugProtection();
     void SetupWindowsServiceProtection();
+    void SetupWindowsThreadProtection();
+    void SetupWindowsHandleProtection();
 #endif
 };
 
