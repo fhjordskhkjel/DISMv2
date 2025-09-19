@@ -1,0 +1,236 @@
+{
+  "hips_configuration": {
+    "version": "1.0.0",
+    "general": {
+      "scan_interval_ms": 1000,
+      "log_level": "INFO",
+      "log_file": "hips.log",
+      "enable_startup_scan": true,
+      "enable_real_time_protection": true
+    },
+    "file_monitoring": {
+      "enabled": true,
+      "watch_paths": [
+        "C:\\Windows\\System32",
+        "C:\\Windows\\SysWOW64",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+        "C:\\Users"
+      ],
+      "excluded_extensions": [
+        ".log",
+        ".tmp",
+        ".temp",
+        ".bak",
+        ".cache",
+        ".txt",
+        ".doc",
+        ".docx",
+        ".pdf",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".bmp",
+        ".mp3",
+        ".mp4",
+        ".avi",
+        ".mov",
+        ".wav"
+      ],
+      "included_extensions": [],
+      "scan_depth": 5,
+      "monitor_network_drives": false
+    },
+    "process_monitoring": {
+      "enabled": true,
+      "scan_interval_ms": 1000,
+      "memory_threshold_mb": 500,
+      "suspicious_processes": [
+        "mimikatz.exe",
+        "psexec.exe",
+        "wmic.exe",
+        "rundll32.exe",
+        "regsvr32.exe"
+      ],
+      "monitor_child_processes": true,
+      "detect_process_injection": true,
+      "monitor_dll_loading": true
+    },
+    "network_monitoring": {
+      "enabled": true,
+      "scan_interval_ms": 5000,
+      "monitor_tcp": true,
+      "monitor_udp": true,
+      "monitor_outbound_only": false,
+      "suspicious_ports": [
+        4444,
+        5555,
+        6666,
+        8080,
+        9999
+      ],
+      "whitelist_local_connections": true
+    },
+    "registry_monitoring": {
+      "enabled": true,
+      "monitored_keys": [
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+        "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+        "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+        "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+      ],
+      "monitor_value_changes": true,
+      "monitor_key_creation": true,
+      "monitor_key_deletion": true
+    },
+    "memory_protection": {
+      "enabled": true,
+      "detect_dll_injection": true,
+      "detect_process_hollowing": true,
+      "detect_heap_spraying": true,
+      "detect_rop_chains": true,
+      "protect_critical_processes": true,
+      "critical_processes": [
+        "lsass.exe",
+        "winlogon.exe",
+        "csrss.exe",
+        "services.exe"
+      ]
+    },
+    "alerting": {
+      "enabled": true,
+      "show_notifications": true,
+      "log_alerts": true,
+      "email_alerts": false,
+      "email_settings": {
+        "smtp_server": "",
+        "smtp_port": 587,
+        "username": "",
+        "password": "",
+        "recipients": []
+      },
+      "syslog_enabled": false,
+      "syslog_server": "",
+      "syslog_port": 514
+    },
+    "threat_response": {
+      "default_action": "ALERT_ONLY",
+      "auto_quarantine_critical": false,
+      "auto_terminate_malicious": false,
+      "backup_before_quarantine": true,
+      "quarantine_directory": "C:\\HIPS\\Quarantine"
+    },
+    "performance": {
+      "max_cpu_usage_percent": 10,
+      "max_memory_usage_mb": 200,
+      "enable_performance_monitoring": true,
+      "throttle_on_high_load": true,
+      "max_events_per_second": 1000
+    },
+    "enterprise": {
+      "central_management_enabled": false,
+      "management_server": "",
+      "management_port": 8443,
+      "report_interval_minutes": 60,
+      "auto_update_enabled": false,
+      "update_server": "",
+      "policy_enforcement": "ADVISORY"
+    }
+  },
+  "security_rules": [
+    {
+      "name": "Critical System File Access",
+      "description": "Monitor access to critical system files",
+      "enabled": true,
+      "event_type": "FILE_ACCESS",
+      "pattern": "ntoskrnl.exe|kernel32.dll|ntdll.dll",
+      "action": "ALERT_ONLY",
+      "min_threat_level": "HIGH",
+      "custom_metadata": {
+        "rule_category": "system_protection",
+        "priority": "high"
+      }
+    },
+    {
+      "name": "Suspicious Process Execution",
+      "description": "Detect execution of potentially suspicious processes",
+      "enabled": true,
+      "event_type": "PROCESS_CREATION",
+      "pattern": "powershell.exe|cmd.exe|wscript.exe|cscript.exe",
+      "action": "ALERT_ONLY",
+      "min_threat_level": "MEDIUM",
+      "custom_metadata": {
+        "rule_category": "process_monitoring",
+        "priority": "medium"
+      }
+    },
+    {
+      "name": "Startup Persistence Detection",
+      "description": "Detect modifications to startup locations",
+      "enabled": true,
+      "event_type": "REGISTRY_MODIFICATION",
+      "pattern": "CurrentVersion\\\\Run",
+      "action": "ALERT_ONLY",
+      "min_threat_level": "HIGH",
+      "custom_metadata": {
+        "rule_category": "persistence_detection",
+        "priority": "high"
+      }
+    },
+    {
+      "name": "Memory Injection Detection",
+      "description": "Detect process memory injection attempts",
+      "enabled": true,
+      "event_type": "MEMORY_INJECTION",
+      "pattern": "",
+      "action": "DENY",
+      "min_threat_level": "CRITICAL",
+      "custom_metadata": {
+        "rule_category": "exploit_prevention",
+        "priority": "critical"
+      }
+    },
+    {
+      "name": "Temp Directory Execution",
+      "description": "Monitor execution of files from temporary directories",
+      "enabled": true,
+      "event_type": "PROCESS_CREATION",
+      "pattern": "\\\\temp\\\\|\\\\tmp\\\\|\\\\appdata\\\\local\\\\temp\\\\",
+      "action": "ALERT_ONLY",
+      "min_threat_level": "MEDIUM",
+      "custom_metadata": {
+        "rule_category": "suspicious_location",
+        "priority": "medium"
+      }
+    },
+    {
+      "name": "Network Backdoor Detection",
+      "description": "Detect connections to suspicious ports",
+      "enabled": true,
+      "event_type": "NETWORK_CONNECTION",
+      "pattern": ":4444|:5555|:6666|:9999",
+      "action": "ALERT_ONLY",
+      "min_threat_level": "HIGH",
+      "custom_metadata": {
+        "rule_category": "network_security",
+        "priority": "high"
+      }
+    },
+    {
+      "name": "System File Modification",
+      "description": "Detect unauthorized modifications to system files",
+      "enabled": true,
+      "event_type": "FILE_MODIFICATION",
+      "pattern": "system32|syswow64",
+      "action": "DENY",
+      "min_threat_level": "CRITICAL",
+      "custom_metadata": {
+        "rule_category": "system_integrity",
+        "priority": "critical"
+      }
+    }
+  ]
+}
