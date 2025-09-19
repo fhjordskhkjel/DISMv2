@@ -2,6 +2,10 @@
 #include "self_protection.h"
 #include "hips_core.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 using namespace HIPS;
 
 class SelfProtectionTest : public ::testing::Test {
@@ -133,10 +137,69 @@ TEST_F(SelfProtectionTest, IntegrityChecksTest) {
     bool file_integrity = self_protection->CheckFileIntegrity();
     bool registry_integrity = self_protection->CheckRegistryIntegrity();
     bool service_integrity = self_protection->CheckServiceIntegrity();
+    bool thread_integrity = self_protection->CheckThreadIntegrity();
+    bool handle_integrity = self_protection->CheckHandleIntegrity();
+    bool critical_section_integrity = self_protection->CheckCriticalSectionIntegrity();
     
     // These tests verify the methods execute without crashing
     // The actual results depend on the test environment
     EXPECT_TRUE(true); // Just verify we got here without exceptions
+}
+
+TEST_F(SelfProtectionTest, BSODProofOperationsTest) {
+    ASSERT_TRUE(self_protection->Initialize());
+    ASSERT_TRUE(self_protection->Start());
+    
+#ifdef _WIN32
+    // Test BSOD-proof operations
+    DWORD current_pid = GetCurrentProcessId();
+    
+    // Test safe process operations (should not crash)
+    bool is_alive = self_protection->CheckProcessIsAlive(current_pid);
+    EXPECT_TRUE(is_alive); // Current process should be alive
+    
+    // Test safe handle operations
+    HANDLE dummy_handle = nullptr;
+    bool open_result = self_protection->SafeOpenProcess(current_pid, PROCESS_QUERY_INFORMATION, dummy_handle);
+    if (open_result && dummy_handle) {
+        EXPECT_TRUE(self_protection->ValidateProcessHandle(dummy_handle));
+        EXPECT_TRUE(self_protection->SafeCloseHandle(dummy_handle));
+    }
+    
+    // Test invalid operations (should not crash)
+    EXPECT_FALSE(self_protection->SafeTerminateProcess(0)); // Invalid PID
+    EXPECT_FALSE(self_protection->CheckProcessIsAlive(0xFFFFFFFF)); // Invalid PID
+#else
+    // On non-Windows platforms, just verify methods exist and don't crash
+    EXPECT_FALSE(self_protection->CheckProcessIsAlive(1234));
+    EXPECT_FALSE(self_protection->SafeTerminateProcess(1234));
+#endif
+}
+
+TEST_F(SelfProtectionTest, EnhancedConfigurationTest) {
+    ASSERT_TRUE(self_protection->Initialize());
+    
+    // Test enhanced configuration options
+    SelfProtectionConfig config;
+    config.thread_protection_enabled = true;
+    config.handle_protection_enabled = true;
+    config.seh_protection_enabled = true;
+    config.safe_mode_enabled = true;
+    config.graceful_degradation = true;
+    config.max_api_retry_attempts = 5;
+    config.api_timeout_ms = 10000;
+    config.validate_handles = true;
+    config.check_thread_integrity = true;
+    config.monitor_critical_sections = true;
+    
+    ASSERT_TRUE(self_protection->LoadConfiguration(config));
+    
+    SelfProtectionConfig loaded_config = self_protection->GetConfiguration();
+    EXPECT_EQ(loaded_config.thread_protection_enabled, config.thread_protection_enabled);
+    EXPECT_EQ(loaded_config.handle_protection_enabled, config.handle_protection_enabled);
+    EXPECT_EQ(loaded_config.seh_protection_enabled, config.seh_protection_enabled);
+    EXPECT_EQ(loaded_config.safe_mode_enabled, config.safe_mode_enabled);
+    EXPECT_EQ(loaded_config.max_api_retry_attempts, config.max_api_retry_attempts);
 }
 
 TEST_F(SelfProtectionTest, HIPSEngineIntegrationTest) {
@@ -192,6 +255,12 @@ TEST(SelfProtectionUtilityTest, EventTypeToStringTest) {
               "File Tampering Attempt");
     EXPECT_EQ(SelfProtectionEventTypeToString(SelfProtectionEventType::DEBUG_ATTEMPT), 
               "Debug Attempt");
+    EXPECT_EQ(SelfProtectionEventTypeToString(SelfProtectionEventType::THREAD_MANIPULATION_ATTEMPT), 
+              "Thread Manipulation Attempt");
+    EXPECT_EQ(SelfProtectionEventTypeToString(SelfProtectionEventType::HANDLE_MANIPULATION_ATTEMPT), 
+              "Handle Manipulation Attempt");
+    EXPECT_EQ(SelfProtectionEventTypeToString(SelfProtectionEventType::CRITICAL_SECTION_VIOLATION), 
+              "Critical Section Violation");
 }
 
 TEST(SelfProtectionUtilityTest, ActionToStringTest) {
