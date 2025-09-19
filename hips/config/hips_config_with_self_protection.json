@@ -1,0 +1,149 @@
+{
+  "hips_config": {
+    "version": "1.2.0",
+    "general": {
+      "log_level": "INFO",
+      "max_events_per_minute": 1000,
+      "enable_learning_mode": false
+    },
+    "monitoring": {
+      "file_system": {
+        "enabled": true,
+        "watch_paths": [
+          "C:\\Windows\\System32",
+          "C:\\Program Files",
+          "C:\\Program Files (x86)"
+        ],
+        "scan_interval_ms": 1000
+      },
+      "process": {
+        "enabled": true,
+        "scan_interval_ms": 2000
+      },
+      "network": {
+        "enabled": true,
+        "monitor_ports": [80, 443, 22, 21, 25, 53, 110, 143, 993, 995]
+      },
+      "registry": {
+        "enabled": true,
+        "watch_keys": [
+          "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+          "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+        ]
+      },
+      "memory": {
+        "enabled": true,
+        "injection_detection": true,
+        "heap_spray_detection": true
+      }
+    },
+    "self_protection": {
+      "enabled": true,
+      "process_protection": {
+        "enabled": true,
+        "prevent_termination": true,
+        "prevent_injection": true,
+        "prevent_debugging": true
+      },
+      "file_protection": {
+        "enabled": true,
+        "protected_files": [
+          "hips.exe",
+          "HipsGui.exe",
+          "HipsDriver.sys",
+          "hips_lib.dll",
+          "hips_config.json"
+        ],
+        "protected_directories": [
+          "C:\\Program Files\\HIPS",
+          "C:\\Windows\\System32\\drivers"
+        ]
+      },
+      "registry_protection": {
+        "enabled": true,
+        "protected_keys": [
+          "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\HipsDriver",
+          "HKEY_LOCAL_MACHINE\\SOFTWARE\\HIPS"
+        ]
+      },
+      "service_protection": {
+        "enabled": true,
+        "protected_services": [
+          "HipsDriver",
+          "HipsService"
+        ]
+      },
+      "memory_protection": {
+        "enabled": true,
+        "prevent_code_injection": true,
+        "prevent_memory_manipulation": true
+      },
+      "response_settings": {
+        "auto_quarantine_attackers": false,
+        "terminate_attacking_process": false,
+        "block_and_alert": true,
+        "max_protection_events_per_minute": 100
+      },
+      "trusted_processes": [
+        "C:\\Windows\\System32\\services.exe",
+        "C:\\Windows\\System32\\winlogon.exe",
+        "C:\\Windows\\System32\\csrss.exe",
+        "C:\\Windows\\System32\\lsass.exe",
+        "C:\\Windows\\System32\\svchost.exe"
+      ]
+    },
+    "threat_rules": [
+      {
+        "name": "Suspicious Process Execution",
+        "description": "Detect execution of suspicious processes",
+        "event_type": "PROCESS_CREATION",
+        "pattern": "",
+        "action": "ALERT_ONLY",
+        "min_threat_level": "MEDIUM",
+        "enabled": true
+      },
+      {
+        "name": "Critical File Access",
+        "description": "Monitor access to critical system files",
+        "event_type": "FILE_ACCESS",
+        "pattern": "System32",
+        "action": "ALERT_ONLY",
+        "min_threat_level": "HIGH",
+        "enabled": true
+      },
+      {
+        "name": "HIPS Self-Protection",
+        "description": "Detect attempts to tamper with HIPS components",
+        "event_type": "EXPLOIT_ATTEMPT",
+        "pattern": "SELF-PROTECTION",
+        "action": "DENY",
+        "min_threat_level": "HIGH",
+        "enabled": true
+      },
+      {
+        "name": "Memory Injection Detection",
+        "description": "Detect memory injection attempts",
+        "event_type": "MEMORY_INJECTION",
+        "pattern": "",
+        "action": "DENY",
+        "min_threat_level": "CRITICAL",
+        "enabled": true
+      },
+      {
+        "name": "Registry Persistence Detection",
+        "description": "Detect malware persistence via registry",
+        "event_type": "REGISTRY_MODIFICATION",
+        "pattern": "Run",
+        "action": "ALERT_ONLY",
+        "min_threat_level": "MEDIUM",
+        "enabled": true
+      }
+    ],
+    "alert_settings": {
+      "email_notifications": false,
+      "syslog_forwarding": false,
+      "local_alerting": true,
+      "alert_retention_days": 30
+    }
+  }
+}

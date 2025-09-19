@@ -7,6 +7,7 @@
 #include "config_manager.h"
 #include "log_manager.h"
 #include "alert_manager.h"
+#include "self_protection.h"
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -128,6 +129,27 @@ bool HIPSEngine::InitializeComponents() {
         ProcessSecurityEvent(event);
     });
     
+    // Initialize self-protection engine
+    self_protection_ = std::make_unique<SelfProtectionEngine>();
+    if (!self_protection_->Initialize()) {
+        return false;
+    }
+    
+    // Register self-protection event callback
+    self_protection_->RegisterEventHandler([this](const SelfProtectionEvent& event) {
+        // Convert self-protection event to security event for logging/alerting
+        SecurityEvent sec_event;
+        sec_event.type = EventType::EXPLOIT_ATTEMPT;
+        sec_event.threat_level = event.threat_level;
+        sec_event.process_path = event.attacker_process_path;
+        sec_event.target_path = event.target_resource;
+        sec_event.description = "[SELF-PROTECTION] " + event.description;
+        sec_event.process_id = event.attacker_pid;
+        sec_event.thread_id = 0;
+        sec_event.timestamp = event.timestamp;
+        ProcessSecurityEvent(sec_event);
+    });
+    
     return true;
 }
 
@@ -149,6 +171,7 @@ bool HIPSEngine::Start() {
         if (!net_monitor_->Start()) return false;
         if (!reg_monitor_->Start()) return false;
         if (!mem_protector_->Start()) return false;
+        if (!self_protection_->Start()) return false;
         
         running_.store(true);
         log_manager_->LogInfo("HIPS Engine started successfully");
@@ -169,6 +192,7 @@ bool HIPSEngine::Stop() {
     
     try {
         // Stop all monitoring components
+        if (self_protection_) self_protection_->Stop();
         if (mem_protector_) mem_protector_->Stop();
         if (reg_monitor_) reg_monitor_->Stop();
         if (net_monitor_) net_monitor_->Stop();
@@ -210,6 +234,7 @@ bool HIPSEngine::Shutdown() {
 }
 
 void HIPSEngine::ShutdownComponents() {
+    self_protection_.reset();
     mem_protector_.reset();
     reg_monitor_.reset();
     net_monitor_.reset();
@@ -401,6 +426,91 @@ void HIPSEngine::LoadDefaultRules() {
     critical_file_access.min_threat_level = ThreatLevel::HIGH;
     critical_file_access.enabled = true;
     AddRule(critical_file_access);
+    
+    // Add self-protection specific rules
+    SecurityRule self_protection_rule;
+    self_protection_rule.name = "HIPS Self-Protection";
+    self_protection_rule.description = "Detect attempts to tamper with HIPS components";
+    self_protection_rule.event_type = EventType::EXPLOIT_ATTEMPT;
+    self_protection_rule.pattern = "SELF-PROTECTION";
+    self_protection_rule.action = ActionType::DENY;
+    self_protection_rule.min_threat_level = ThreatLevel::HIGH;
+    self_protection_rule.enabled = true;
+    AddRule(self_protection_rule);
+}
+}
+
+// Self-protection methods implementation
+bool HIPSEngine::EnableSelfProtection(bool enable) {
+    if (!self_protection_) {
+        return false;
+    }
+    
+    if (enable) {
+        if (!self_protection_->IsInitialized() && !self_protection_->Initialize()) {
+            return false;
+        }
+        
+        if (!self_protection_->IsRunning() && !self_protection_->Start()) {
+            return false;
+        }
+        
+        if (log_manager_) {
+            log_manager_->LogInfo("Self-protection enabled successfully");
+        }
+    } else {
+        if (self_protection_->IsRunning()) {
+            self_protection_->Stop();
+        }
+        
+        if (log_manager_) {
+            log_manager_->LogInfo("Self-protection disabled");
+        }
+    }
+    
+    return true;
+}
+
+bool HIPSEngine::IsSelfProtectionEnabled() const {
+    return self_protection_ && self_protection_->IsRunning();
+}
+
+bool HIPSEngine::CheckSelfIntegrity() {
+    if (!self_protection_) {
+        return false;
+    }
+    
+    bool process_integrity = self_protection_->CheckProcessIntegrity();
+    bool file_integrity = self_protection_->CheckFileIntegrity();
+    bool registry_integrity = self_protection_->CheckRegistryIntegrity();
+    bool service_integrity = self_protection_->CheckServiceIntegrity();
+    
+    bool overall_integrity = process_integrity && file_integrity && 
+                           registry_integrity && service_integrity;
+    
+    if (log_manager_) {
+        if (overall_integrity) {
+            log_manager_->LogInfo("Self-integrity check passed");
+        } else {
+            log_manager_->LogWarning("Self-integrity check failed - potential tampering detected");
+        }
+    }
+    
+    return overall_integrity;
+}
+
+uint64_t HIPSEngine::GetSelfProtectionEventCount() const {
+    if (!self_protection_) {
+        return 0;
+    }
+    return self_protection_->GetProtectionEventCount();
+}
+
+uint64_t HIPSEngine::GetBlockedAttacksCount() const {
+    if (!self_protection_) {
+        return 0;
+    }
+    return self_protection_->GetBlockedAttacksCount();
 }
 
 // Utility function implementations

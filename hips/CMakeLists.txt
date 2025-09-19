@@ -59,6 +59,7 @@ set(HIPS_SOURCES
     src/log_manager.cpp
     src/alert_manager.cpp
     src/driver_interface.cpp
+    src/self_protection.cpp
 )
 
 # Header files
@@ -73,6 +74,7 @@ set(HIPS_HEADERS
     include/log_manager.h
     include/alert_manager.h
     include/driver_interface.h
+    include/self_protection.h
 )
 
 # Create HIPS library
