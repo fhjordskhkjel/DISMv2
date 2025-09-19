@@ -6,21 +6,24 @@
 
 ## Advanced HIPS (Host Intrusion Prevention System)
 
-**🚨 Enterprise-Grade Windows Security Solution**
+**🚨 Enterprise-Grade Windows Security Solution with Kernel-Level Protection**
 
-The Advanced HIPS system is a comprehensive Windows-only Host Intrusion Prevention System designed for enterprise environments. It provides real-time monitoring and protection against advanced threats and intrusions.
+The Advanced HIPS system is a comprehensive Windows-only Host Intrusion Prevention System designed for enterprise environments. It provides real-time monitoring and protection against advanced threats and intrusions through both user-mode and **kernel-mode components**.
 
 ### 🛡️ Core Protection Features
-- **Real-time File System Monitoring**: Monitor file access, modifications, and deletions
-- **Advanced Process Monitoring**: Detect suspicious process behavior and injection attempts  
+- **Kernel-Level File System Monitoring**: Minifilter driver for real-time file access, modifications, and deletions
+- **Advanced Process Monitoring**: Kernel callbacks for process creation/termination that cannot be bypassed
 - **Network Traffic Analysis**: Monitor network connections and detect suspicious activity
-- **Registry Protection**: Protect critical registry keys from unauthorized modifications
-- **Memory Protection**: Prevent memory injection and exploit attempts
+- **Registry Protection**: Kernel-level registry monitoring for critical keys and auto-start locations
+- **Memory Protection**: Prevent memory injection and exploit attempts through kernel callbacks
 - **Behavioral Analysis**: Detect advanced persistent threats and zero-day exploits
+- **Driver Communication**: Secure communication channel between kernel driver and user-mode application
 
 ### 🎯 Key Advantages
-- **Windows-Native**: Built specifically for Windows using Win32 APIs
+- **Kernel-Mode Protection**: Cannot be bypassed by rootkits or advanced malware
+- **Windows-Native**: Built specifically for Windows using Win32 APIs and Windows Driver Kit (WDK)
 - **Enterprise-Ready**: Designed for large-scale deployments with centralized management
+- **Visual Studio 2022 Compatible**: Full support for modern development tools and workflows
 - **Highly Customizable**: Flexible rule engine for custom security policies
 - **Performance Optimized**: Minimal system impact with intelligent filtering
 - **Comprehensive Testing**: Enterprise-level test suite ensuring reliability
@@ -31,14 +34,26 @@ The complete HIPS documentation is located in [hips/docs/README.md](hips/docs/RE
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Windows 7 or later (Windows 10/11 recommended)
+- Windows 10 or later (Windows 11 recommended for best compatibility)
 - Administrator privileges for installation and operation
-- Visual Studio 2019 or later / MinGW-w64 for compilation
+- **Visual Studio 2022** with C++ workload for compilation
+- **Windows Driver Kit (WDK) for Visual Studio 2022** for kernel driver compilation
 - CMake 3.15 or later
+- **Code signing certificate** or test signing enabled for driver installation
 
 ### Building from Source
 
-```bash
+#### Option 1: Complete Build with Kernel Driver (Recommended)
+```batch
+# Navigate to HIPS directory
+cd hips
+
+# Build both user-mode application and kernel driver
+build_with_driver.bat
+```
+
+#### Option 2: User-Mode Only Build
+```batch
 # Navigate to HIPS directory
 cd hips
 
@@ -48,18 +63,60 @@ build.bat
 # Manual build using CMake
 mkdir build
 cd build
-cmake ..
+cmake .. -G "Visual Studio 17 2022"
 cmake --build . --config Release
 
 # Run tests
 ctest -C Release
 ```
 
+#### Option 3: Using Visual Studio 2022 IDE
+```batch
+# Open the solution file
+AdvancedHIPS.sln
+
+# Build the entire solution (Ctrl+Shift+B)
+# Or build individual projects:
+# - HipsUserMode: User-mode application
+# - HipsDriver: Kernel-mode driver
+```
+
 ### Installation
 
+#### Kernel Driver Installation (Required for Full Protection)
+1. **Enable Test Signing** (for development/testing):
+   ```batch
+   # Run as Administrator
+   bcdedit /set testsigning on
+   # Reboot required
+   ```
+
+2. **Install the Kernel Driver**:
+   ```batch
+   # Navigate to driver output directory
+   cd hips\bin\x64\Release
+   
+   # Install using PnP utility
+   pnputil /add-driver HipsDriver.inf /install
+   
+   # Or right-click HipsDriver.inf and select "Install"
+   ```
+
+3. **Start the Driver Service**:
+   ```batch
+   # Start the driver
+   sc start HipsDriver
+   
+   # Verify driver is running
+   sc query HipsDriver
+   ```
+
+#### User-Mode Application
 1. Build the project using instructions above
 2. Run `hips.exe` as Administrator
 3. Configure using `config/hips_config.json`
+
+**Note**: For production deployment, obtain a valid code signing certificate and sign the driver.
 
 ## Architecture
 

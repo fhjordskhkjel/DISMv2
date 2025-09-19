@@ -1,0 +1,68 @@
+;
+; Advanced HIPS Kernel Driver Installation File
+; Copyright (c) 2024 HIPS Project
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = SecurityDevices
+ClassGuid   = {d0d7ef10-6a1b-11d0-a0b7-00d0b70a3ae9}
+Provider    = %ManufacturerName%
+CatalogFile = HipsDriver.cat
+DriverVer   = 01/01/2024,1.0.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+HipsDriver.DriverFiles = 12
+
+[DefaultInstall]
+OptionDesc = %ServiceDescription%
+CopyFiles  = HipsDriver.DriverFiles
+
+[DefaultInstall.Services]
+AddService = %ServiceName%,,HipsDriver.Service
+
+[DefaultUninstall]
+DelFiles = HipsDriver.DriverFiles
+
+[DefaultUninstall.Services]
+DelService = %ServiceName%,0x200
+
+[HipsDriver.Service]
+DisplayName    = %ServiceDisplayName%
+Description    = %ServiceDescription%
+ServiceBinary  = %12%\HipsDriver.sys
+Dependencies   = FltMgr
+ServiceType    = 2
+StartType      = 3
+ErrorControl   = 1
+LoadOrderGroup = FSFilter Anti-Virus
+AddReg         = HipsDriver.AddRegistry
+
+[HipsDriver.AddRegistry]
+HKR,,"DebugFlags",0x00010001,0x0
+HKR,,"SupportedFeatures",0x00010001,0x3
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
+
+[HipsDriver.DriverFiles]
+HipsDriver.sys
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+HipsDriver.sys = 1,,
+
+[Strings]
+ManufacturerName     = "HIPS Project"
+ServiceName          = "HipsDriver"
+ServiceDisplayName   = "Advanced HIPS Kernel Driver"
+ServiceDescription   = "Advanced Host Intrusion Prevention System Kernel Driver"
+DiskName             = "Advanced HIPS Installation Disk"
+DefaultInstance      = "HipsDriver Instance"
+Instance1.Name       = "HipsDriver Instance"
+Instance1.Altitude   = "320000"
+Instance1.Flags      = 0x0

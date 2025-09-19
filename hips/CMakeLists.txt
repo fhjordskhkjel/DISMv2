@@ -5,6 +5,16 @@ project(HIPS VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Visual Studio 2022 compatibility
+if(MSVC)
+    # Set Visual Studio 2022 toolset
+    set(CMAKE_GENERATOR_TOOLSET "v143" CACHE STRING "Platform Toolset" FORCE)
+    # Ensure compatibility with Windows 10/11
+    add_definitions(-D_WIN32_WINNT=0x0A00)  # Windows 10 minimum for kernel driver compatibility
+    # Use dynamic runtime for VS2022
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 # Warn for non-Windows builds but allow for development/testing
 if(NOT WIN32)
     message(WARNING "HIPS system is primarily designed for Windows. Some features may not work on other platforms.")
@@ -18,14 +28,16 @@ endif()
 
 # Compiler-specific options
 if(MSVC)
-    # Visual Studio specific options
-    add_compile_options(/W4 /WX)
-    add_definitions(-D_WIN32_WINNT=0x0601)  # Windows 7 minimum
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    # Visual Studio 2022 specific options
+    add_compile_options(/W4)  # Removed /WX to allow warnings during development
+    add_compile_options(/std:c++17)
+    # Enable kernel driver communication support
+    add_definitions(-DHIPS_KERNEL_DRIVER_SUPPORT)
 else()
     # MinGW/GCC options
     if(WIN32)
         add_compile_options(-Wall -Wextra -pedantic -Werror)
+        add_definitions(-DHIPS_KERNEL_DRIVER_SUPPORT)
     else()
         # Relaxed warnings for cross-platform development builds
         add_compile_options(-Wall -Wextra)
@@ -46,6 +58,7 @@ set(HIPS_SOURCES
     src/config_manager.cpp
     src/log_manager.cpp
     src/alert_manager.cpp
+    src/driver_interface.cpp
 )
 
 # Header files
@@ -59,6 +72,7 @@ set(HIPS_HEADERS
     include/config_manager.h
     include/log_manager.h
     include/alert_manager.h
+    include/driver_interface.h
 )
 
 # Create HIPS library
