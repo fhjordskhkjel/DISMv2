@@ -24,6 +24,8 @@ The Advanced HIPS system is a comprehensive Windows-only Host Intrusion Preventi
 - **Windows-Native**: Built specifically for Windows using Win32 APIs and Windows Driver Kit (WDK)
 - **Enterprise-Ready**: Designed for large-scale deployments with centralized management
 - **Visual Studio 2022 Compatible**: Full support for modern development tools and workflows
+- **Native VC++ GUI**: Modern MFC-based graphical interface for easy configuration and monitoring
+- **BSOD-Proof Driver**: Enhanced exception handling prevents system crashes
 - **Highly Customizable**: Flexible rule engine for custom security policies
 - **Performance Optimized**: Minimal system impact with intelligent filtering
 - **Comprehensive Testing**: Enterprise-level test suite ensuring reliability
@@ -123,6 +125,31 @@ AdvancedHIPS.sln
    # Verify driver is running
    sc query HipsDriver
    ```
+
+#### GUI Configuration Tool (NEW!)
+
+The HIPS system now includes a modern MFC-based GUI application built with Visual C++:
+
+**Features:**
+- **Real-time Driver Status**: Monitor connection and operational status
+- **Event Monitoring**: View security events in real-time with detailed information
+- **Driver Control**: Start/stop monitoring, connect/disconnect from kernel driver
+- **Activity Logging**: Comprehensive logging of all system activities
+- **Configuration Management**: Easy-to-use interface for system settings
+
+**Using the GUI:**
+1. Build the GUI project in Visual Studio 2022:
+   ```batch
+   cd hips\gui_vcpp
+   msbuild HipsGui.vcxproj /p:Configuration=Release /p:Platform=x64
+   ```
+
+2. Launch the application:
+   ```batch
+   HipsGui.exe
+   ```
+
+3. Connect to the driver and start monitoring through the intuitive interface
 
 #### User-Mode Application
 1. Build the project using instructions above
@@ -225,6 +252,52 @@ The HIPS system is designed for minimal performance impact:
 2. Create a feature branch
 3. Implement your changes with tests
 4. Submit a pull request
+
+## Troubleshooting
+
+### Common Issues
+
+#### Driver Installation Issues
+- **Problem**: Driver fails to install with "Driver is not digitally signed" error
+- **Solution**: Enable test signing mode or obtain a valid code signing certificate
+  ```batch
+  # Enable test signing (requires reboot)
+  bcdedit /set testsigning on
+  ```
+
+#### Driver Won't Start
+- **Problem**: `sc start HipsDriver` returns error
+- **Solutions**:
+  1. Check if driver is properly installed: `sc query HipsDriver`
+  2. Verify kernel driver files are in correct location
+  3. Check Event Viewer for detailed error messages
+  4. Ensure running as Administrator
+
+#### BSOD or System Instability
+- **Problem**: Blue Screen of Death when driver is loaded
+- **Prevention**: Enhanced driver stability implemented with:
+  - Comprehensive buffer validation
+  - Exception handling around user buffer access
+  - Memory leak prevention
+  - Proper IRQL level management
+  - Robust cleanup in exception paths
+- **Solution**: Boot in safe mode and remove driver if issues persist
+
+#### GUI Connection Issues
+- **Problem**: GUI cannot connect to driver
+- **Solutions**:
+  1. Ensure driver is running: `sc query HipsDriver`
+  2. Run GUI as Administrator
+  3. Check Windows Event Viewer for driver errors
+  4. Verify driver device is created: Check `\\Device\\HipsDriver`
+
+#### High CPU Usage
+- **Problem**: HIPS driver causing high system load
+- **Solutions**:
+  1. Adjust monitoring sensitivity in configuration
+  2. Reduce event queue size
+  3. Add exclusions for trusted processes
+  4. Check for event loop issues in logs
 
 ## License
 
