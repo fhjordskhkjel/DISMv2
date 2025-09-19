@@ -244,6 +244,115 @@ void printUsage() {
     std::cout << "  --diag                               - Dump OS build, DISM version, servicing stack version\n";
 }
 
+void printCommandList() {
+    std::cout << "Available commands:\n\n";
+    std::cout << "  --- Package Extraction & Inspection ---\n";
+    std::cout << "  extract-psf                  - Extract PSF/APPX/MSIX using Windows APIs\n";
+    std::cout << "  list-psf                     - List PSF/APPX/MSIX package information\n";
+    std::cout << "  extract-wim                  - Extract WIM image using wimgapi.dll\n";
+    std::cout << "  list-wim                     - List WIM images using wimgapi.dll\n";
+    std::cout << "  capture-wim                  - Capture directory to WIM\n";
+    std::cout << "  detect-type                  - Auto-detect package format\n";
+    
+    std::cout << "\n  --- Component Servicing (DISM Wrappers) ---\n";
+    std::cout << "  add-package-enhanced         - Enhanced package addition with CBS/simplified modes\n";
+    std::cout << "  enable-feature               - Enable a Windows feature\n";
+    std::cout << "  disable-feature              - Disable a Windows feature\n";
+    std::cout << "  add-capability               - Add a Windows capability\n";
+    std::cout << "  remove-capability            - Remove a Windows capability\n";
+    std::cout << "  add-package-dism             - Add a package using DISM\n";
+    std::cout << "  remove-package-dism          - Remove a package using DISM\n";
+    std::cout << "  add-driver                   - Add a driver to an image\n";
+    std::cout << "  remove-driver                - Remove a driver from an image\n";
+    std::cout << "  add-provisioned-appx         - Add a provisioned AppX/MSIX package\n";
+    std::cout << "  remove-provisioned-appx      - Remove a provisioned AppX/MSIX package\n";
+
+    std::cout << "\n  --- Image Management ---\n";
+    std::cout << "  mount-image                  - Mount a WIM image to a directory\n";
+    std::cout << "  unmount-image                - Unmount a WIM image\n";
+    std::cout << "  get-mounted-images           - List all mounted WIM images\n";
+
+    std::cout << "\n  --- Diagnostics ---\n";
+    std::cout << "  tail-cbs-logs                - Show last N lines of CBS/DISM logs\n";
+    std::cout << "  diag                         - Dump OS, DISM, and Servicing Stack versions\n";
+
+    std::cout << "\n  --- Help ---\n";
+    std::cout << "  help                         - Shows this list or help for a specific command\n";
+
+    std::cout << "\nFor help on a specific command, run: TestAI.exe help <command>\n";
+}
+
+void printCommandHelp(const std::string& command) {
+    if (command == "help") {
+        printCommandList();
+    } else if (command == "add-package-enhanced") {
+        std::cout << "Usage: TestAI.exe add-package-enhanced <package-path|/ExtractedDir:path|/PackagePath:path> [options]\n\n";
+        std::cout << "Enhanced package addition with multiple installation strategies.\n\n";
+        std::cout << "Arguments:\n";
+        std::cout << "  <package-path>             Path to the package file (.msu, .cab, etc.).\n";
+        std::cout << "  /ExtractedDir:<path>       Install from a pre-extracted directory.\n";
+        std::cout << "  /PackagePath:<path>        DISM-style argument for the package path.\n\n";
+        std::cout << "Options:\n";
+        std::cout << "  /CBS or --cbs-integration  Use Component-Based Servicing (CBS) for robust installation.\n";
+        std::cout << "  /Online                    Target the running operating system (default).\n";
+        std::cout << "  /Offline                   Target an offline Windows image.\n";
+        std::cout << "  /Image:<path>              Path to the root of the offline Windows image (required for /Offline).\n";
+        std::cout << "  --security-validation      Enable enterprise-grade security and signature validation.\n";
+        std::cout << "  --force                    Override safety checks (e.g., superseded packages, signature failures).\n";
+        std::cout << "  --dry-run                  Simulate the operation without making system changes.\n";
+        std::cout << "  --no-catalog-register      Disable automatic registration of extracted catalog files.\n";
+        std::cout << "  --no-powershell            Disable PowerShell fallback for extraction.\n";
+        std::cout << "  --no-wusa                  Disable wusa.exe fallback for extraction.\n";
+        std::cout << "  --no-7z                    Disable 7-Zip fallback for extraction.\n";
+        std::cout << "  --temp-dir <path>          Override the temporary directory for this operation.\n";
+        std::cout << "  --log <file>               Log output to a specific file.\n";
+        std::cout << "  --verbose                  Enable detailed console output.\n";
+        std::cout << "  --timeout-ms <ms>          Set a timeout in milliseconds for external tools (e.g., DISM, expand).\n";
+    } else if (command == "enable-feature") {
+        std::cout << "Usage: TestAI.exe enable-feature <FeatureName> [/Online|/Offline /Image:<path>] [--all] [--no-restart] [--json]\n\n";
+        std::cout << "Enables a specified feature in a Windows image.\n\n";
+        std::cout << "Arguments:\n";
+        std::cout << "  <FeatureName>              The name of the feature to enable (e.g., NetFx3).\n\n";
+        std::cout << "Options:\n";
+        std::cout << "  /Online                    Targets the running OS (default).\n";
+        std::cout << "  /Offline /Image:<path>     Targets an offline image.\n";
+        std::cout << "  --all                      Enable all parent features of the specified feature.\n";
+        std::cout << "  --no-restart               Prevents the tool from automatically restarting the system.\n";
+        std::cout << "  --json                     Output the result in JSON format.\n";
+    } else if (command == "tail-cbs-logs") {
+        std::cout << "Usage: TestAI.exe tail-cbs-logs [N]\n\n";
+        std::cout << "Shows the last N lines of the CBS.log and DISM.log files for quick diagnostics.\n\n";
+        std::cout << "Arguments:\n";
+        std::cout << "  [N]                        The number of lines to show. Defaults to 200.\n";
+    }
+    // Add other commands here...
+    else if (command == "mount-image") {
+        std::cout << "Usage: TestAI.exe mount-image /ImageFile:<wim_path> /Index:<index> /MountDir:<path> [/ReadOnly]\n\n";
+        std::cout << "Mounts a specific image from a WIM file to a directory.\n\n";
+        std::cout << "Arguments:\n";
+        std::cout << "  /ImageFile:<wim_path>      Path to the WIM file.\n";
+        std::cout << "  /Index:<index>             The index of the image within the WIM file to mount.\n";
+        std::cout << "  /MountDir:<path>           The directory to mount the image to.\n\n";
+        std::cout << "Options:\n";
+        std::cout << "  /ReadOnly                  Mount the image with read-only access.\n";
+    } else if (command == "unmount-image") {
+        std::cout << "Usage: TestAI.exe unmount-image /MountDir:<path> [/Commit|/Discard]\n\n";
+        std::cout << "Unmounts a WIM image from a directory.\n\n";
+        std::cout << "Arguments:\n";
+        std::cout << "  /MountDir:<path>           The directory where the image is mounted.\n\n";
+        std::cout << "Options:\n";
+        std::cout << "  /Commit                    Saves changes to the WIM image.\n";
+        std::cout << "  /Discard                   Discards any changes made to the image (default).\n";
+    } else if (command == "get-mounted-images") {
+        std::cout << "Usage: TestAI.exe get-mounted-images\n\n";
+        std::cout << "Lists details of all currently mounted WIM images.\n";
+    }
+    else {
+        std::cout << "No help available for command: '" << command << "'\n";
+        std::cout << "Run 'TestAI.exe help' for a list of available commands.\n";
+    }
+}
+
 // Parse package intelligence arguments
 struct PackageIntelligenceArgs {
     std::string packageName;
@@ -426,6 +535,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    std::string command = argv[1];
+    if (command == "help") {
+        if (argc > 2) {
+            printCommandHelp(argv[2]);
+        } else {
+            printCommandList();
+        }
+        return 0;
+    }
+
     if (!argv || !argv[0] || !argv[1]) {
         std::cerr << "Error: Invalid command line arguments\n";
         return 1;
@@ -436,7 +555,6 @@ int main(int argc, char* argv[]) {
         return parseResult;
     }
     
-    std::string command = argv[1];
     if (command.empty()) {
         std::cerr << "Error: Empty command provided\n";
         printUsage();
@@ -762,12 +880,14 @@ int main(int argc, char* argv[]) {
                 std::cout << "  /CBS or --cbs-integration    - Use Component-Based Servicing (CBS) integration\n";
                 std::cout << "  /Online                      - Online installation mode (default)\n";
                 std::cout << "  /Offline                     - Offline installation mode\n";
-                std::cout << "  --security-validation       - Enable enterprise-grade security validation\n";
+                std::cout << "  /Image:<path>              - Path to the root of the offline Windows image (required for /Offline)\n";
+                std::cout << "  --security-validation        - Enable enterprise-grade security validation\n";
                 std::cout << "  --force                      - Override safety checks and install anyway\n";
                 std::cout << "  --dry-run                    - Simulate the operation without making changes\n";
                 std::cout << "  --temp-dir <path>           - Override temp directory for extraction\n";
                 std::cout << "  --log <file>                - Enable logging to file\n";
                 std::cout << "  --verbose                   - Enable verbose logging\n";
+                std::cout << "  --timeout-ms <ms>          - Set a timeout in milliseconds for external tools (e.g., DISM, expand)\n";
                 return 1;
             }
             
@@ -1375,7 +1495,7 @@ int main(int argc, char* argv[]) {
             bool json = false;
             if (argc < 3) {
                 std::cerr << "Error: Feature name required\n";
-                std::cout << "Usage: " << argv[0] << " " << command << " <FeatureName> [/Online|/Offline /Image:<path>] [--all] [--timeout-ms N] [--json]" << "\n";
+                std::cout << "Usage: " << argv[0] << " " << command << " <FeatureName> [/Online|/Offline /Image:<path>] [--all] [--no-restart] [--json]" << "\n";
                 return 1;
             }
             std::string feature = argv[2];
@@ -1392,7 +1512,7 @@ int main(int argc, char* argv[]) {
             auto t1 = std::chrono::high_resolution_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
             if (json) {
-                std::ostringstream js; js << "{\"command\":\"" << command << "\",\"feature\":\"" << feature << "\",\"success\":" << ((ok && code==0)?"true":"false") << ",\"exitCode\":" << code << ",\"durationMs\":" << ms << "}";
+                std::ostringstream js; js << "{\"command\":\"" << command << "\",\"feature\":\"" << feature << "\",\"success\":" << ((ok && code==0)?"true":"false") << ",\"exitCode\":" << code << ",\"durationMs\":" << ms << "}"; 
                 std::cout << js.str() << "\n";
                 if (!ok || code != 0) return 1; else return 0;
             }
@@ -1468,6 +1588,56 @@ int main(int argc, char* argv[]) {
             if (json) { std::ostringstream js; js << "{\"command\":\"remove-provisioned-appx\",\"package\":\""<<name<<"\",\"success\":"<<((ok&&code==0)?"true":"false")<<",\"exitCode\":"<<code<<",\"durationMs\":"<<ms<<"}"; std::cout<<js.str()<<"\n"; return (ok&&code==0)?0:1; }
             if (!ok || code != 0) { std::cerr << "[FAILED] Remove-ProvisionedAppxPackage failed (code "<<code<<")\n"; if (g_opts.verbose) std::cerr << out << "\n"; return 1; }
             std::cout << "[SUCCESS] Provisioned app removed in " << ms << " ms\n";
+        }
+        else if (command == "mount-image") {
+            if (argc < 5) { std::cerr << "Error: Missing arguments for mount-image.\n"; printCommandHelp("mount-image"); return 1; }
+            std::string wim, mountDir; int index = 0; DismApiWrapper::Options opt;
+            for (int i = 2; i < argc; ++i) {
+                std::string a = argv[i];
+                if (a.rfind("/ImageFile:", 0) == 0) wim = a.substr(11);
+                else if (a.rfind("/MountDir:", 0) == 0) mountDir = a.substr(10);
+                else if (a.rfind("/Index:", 0) == 0) index = std::atoi(a.substr(7).c_str());
+                else if (a == "/ReadOnly") opt.readOnly = true;
+            }
+            if (wim.empty() || mountDir.empty() || index == 0) { std::cerr << "Error: /ImageFile, /MountDir, and /Index are required.\n"; return 1; }
+            
+            DismApiWrapper dism; std::string out; DWORD code = 1;
+            if (dism.mountImage(wim, index, mountDir, opt, out, code) && code == 0) {
+                std::cout << "[SUCCESS] Image mounted successfully.\n";
+                if (g_opts.verbose) std::cout << out << "\n";
+            } else {
+                std::cerr << "[FAILED] Failed to mount image (code " << code << ").\n" << out << "\n";
+                return 1;
+            }
+        }
+        else if (command == "unmount-image") {
+            if (argc < 3) { std::cerr << "Error: Missing arguments for unmount-image.\n"; printCommandHelp("unmount-image"); return 1; }
+            std::string mountDir; bool commit = false;
+            for (int i = 2; i < argc; ++i) {
+                std::string a = argv[i];
+                if (a.rfind("/MountDir:", 0) == 0) mountDir = a.substr(10);
+                else if (a == "/Commit") commit = true;
+                else if (a == "/Discard") commit = false;
+            }
+            if (mountDir.empty()) { std::cerr << "Error: /MountDir is required.\n"; return 1; }
+
+            DismApiWrapper dism; std::string out; DWORD code = 1; DismApiWrapper::Options opt;
+            if (dism.unmountImage(mountDir, commit, opt, out, code) && code == 0) {
+                std::cout << "[SUCCESS] Image unmounted successfully.\n";
+                if (g_opts.verbose) std::cout << out << "\n";
+            } else {
+                std::cerr << "[FAILED] Failed to unmount image (code " << code << ").\n" << out << "\n";
+                return 1;
+            }
+        }
+        else if (command == "get-mounted-images") {
+            DismApiWrapper dism; std::string out; DWORD code = 1;
+            if (dism.getMountedImages(out, code) && code == 0) {
+                std::cout << "Mounted Images:\n" << out << "\n";
+            } else {
+                std::cerr << "[FAILED] Failed to get mounted images (code " << code << ").\n" << out << "\n";
+                return 1;
+            }
         }
         else if (command == "tail-cbs-logs") {
             int lines = 200;

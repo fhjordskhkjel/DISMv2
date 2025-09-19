@@ -21,6 +21,7 @@
 #include <optional>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include "CabHandler.h"
 #include "PsfWimHandler.h"
 #pragma comment(lib, "wintrust.lib")
@@ -1112,7 +1113,55 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
     }
 
     // Process PSF/WIM/ESD via handler
-    // ...existing code (unchanged)...
+    if (!specialComponents.empty()) {
+        int defSpec = (maxThreads < 8 ? maxThreads : 8);
+        int specialThreads = GetEnvInt("DISMV2_SPECIAL_THREADS", defSpec);
+        if (specialThreads < 1) specialThreads = 1; if (specialThreads > 32) specialThreads = 32;
+        appendToErrorLog("Special component workers: " + std::to_string(specialThreads));
+
+        std::atomic<size_t> sidx{0};
+        std::atomic<size_t> sOk{0}, sFail{0};
+        fs::path specialRoot = target / "Windows" / "Temp" / "DISMv2" / "Special";
+        std::error_code sec; fs::create_directories(specialRoot, sec);
+
+        auto sworker = [&]() {
+            for (;;) {
+                size_t i = sidx.fetch_add(1, std::memory_order_relaxed);
+                if (i >= specialComponents.size()) break;
+                const fs::path& sp = specialComponents[i];
+                std::string ext = sp.extension().string(); std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                std::string base = sp.stem().string();
+                fs::path dest = specialRoot / base;
+                std::error_code cdec; fs::create_directories(dest, cdec);
+
+                bool ok = false;
+                try {
+                    if (ext == ".appx" || ext == ".msix" || ext == ".psf") {
+                        PsfWimHandler h; if (h.initialize()) { ok = h.extractPsfPackage(sp.string(), dest.string()); h.cleanup(); }
+                    } else if (ext == ".wim" || ext == ".esd") {
+                        PsfWimHandler h; if (h.initialize()) { ok = h.extractWimImage(sp.string(), /*index*/1, dest.string()); h.cleanup(); }
+                    } else {
+                        ok = false;
+                    }
+                } catch (...) { ok = false; }
+
+                if (ok) {
+                    appendToErrorLog("[special] processed: " + sp.string() + " -> " + dest.string());
+                    ++sOk;
+                } else {
+                    appendToErrorLog("[special] failed: " + sp.string());
+                    ++sFail;
+                }
+            }
+        };
+
+        std::vector<std::thread> sth;
+        sth.reserve(specialThreads);
+        for (int t = 0; t < specialThreads; ++t) sth.emplace_back(sworker);
+        for (auto& th : sth) th.join();
+
+        appendToErrorLog("Special processing summary: ok=" + std::to_string(sOk.load()) + ", failed=" + std::to_string(sFail.load()));
+    }
 
     // Optionally update boot files with bcdboot for offline images if we changed boot content
     if (!isOnline && bootFilesChanged) {

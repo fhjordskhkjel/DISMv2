@@ -34,8 +34,11 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - Improved package signature verification via WinVerifyTrust; basic MUM parsing via MSXML6
 - New component servicing commands (feature/capability/driver/provisioned appx) with optional JSON output
 - Diagnostics: tail-cbs-logs to quickly view CBS/DISM logs
+- Built-in help system: `help` and `help <command>` for detailed usage.
+- Image management commands: `mount-image`, `unmount-image`, `get-mounted-images`.
 
 ## Commands
+- `help [command]` - Displays a list of commands or help for a specific command.
 - `extract-psf <package> <dest>`
 - `list-psf <package>`
 - `list-wim <wim>`
@@ -56,6 +59,11 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
   - `remove-provisioned-appx <PackageName> [/Online|/Offline /Image:<path>] [--json]`
 - Diagnostics:
   - `tail-cbs-logs [N]` — show last N lines (default 200) of CBS.log and DISM.log
+  - `diag` — Dump OS, DISM, and Servicing Stack versions.
+- Image Management:
+  - `mount-image /ImageFile:<wim> /Index:<index> /MountDir:<path> [/ReadOnly]`
+  - `unmount-image /MountDir:<path> [/Commit|/Discard]`
+  - `get-mounted-images`
 
 ## add-package-enhanced options
 - `/CBS` or `--cbs-integration`: CBS-style installation
@@ -67,6 +75,10 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - `--no-powershell`, `--no-wusa`, `--no-7z`
 - `--no-catalog-register` (disable system catalog registration)
 - `--timeout-ms <int>` (override external tool timeouts)
+
+## Built-in Help
+- Run `DISMv2.exe help` to see a full list of available commands.
+- Run `DISMv2.exe help <command>` (e.g., `DISMv2.exe help add-package-enhanced`) to get detailed usage information for a specific command.
 
 ## WIM operations
 - Uses native wimgapi when available for apply/capture, including:
@@ -139,6 +151,12 @@ Notes:
   - `DISMv2.exe add-driver C:\Drivers /Offline /Image:D:\Mount --recurse`
 - Tail CBS/DISM logs
   - `DISMv2.exe tail-cbs-logs 300`
+- Get command help
+  - `DISMv2.exe help add-package-enhanced`
+- Mount an image for servicing
+  - `DISMv2.exe mount-image /ImageFile:C:\images\install.wim /Index:1 /MountDir:D:\Mount`
+- Unmount and commit changes
+  - `DISMv2.exe unmount-image /MountDir:D:\Mount /Commit`
 
 ## Status
 Build-ready and tested. Use `--log` and `--verbose` for best diagnostics.

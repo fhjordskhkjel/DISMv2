@@ -38,6 +38,32 @@ wstring DismApiWrapper::onOff(const Options& opt) { return opt.online ? L"/Onlin
 
 wstring DismApiWrapper::imageArg(const Options& opt) { return onOff(opt); }
 
+bool DismApiWrapper::mountImage(const std::string& wimPath, int index, const std::string& mountDir, const Options& opt, std::string& out, DWORD& exitCode) {
+    wstring dism = getSystemToolPath(L"dism.exe");
+    wstringstream cmd;
+    cmd << L"\"" << dism << L"\" /Mount-Image /ImageFile:" << quote(wstring(wimPath.begin(), wimPath.end()))
+        << L" /Index:" << index << L" /MountDir:" << quote(wstring(mountDir.begin(), mountDir.end()));
+    if (opt.readOnly) {
+        cmd << L" /ReadOnly";
+    }
+    return runProcessCapture(cmd.str(), opt.timeoutMs, out, exitCode);
+}
+
+bool DismApiWrapper::unmountImage(const std::string& mountDir, bool commit, const Options& opt, std::string& out, DWORD& exitCode) {
+    wstring dism = getSystemToolPath(L"dism.exe");
+    wstringstream cmd;
+    cmd << L"\"" << dism << L"\" /Unmount-Image /MountDir:" << quote(wstring(mountDir.begin(), mountDir.end()))
+        << (commit ? L" /Commit" : L" /Discard");
+    return runProcessCapture(cmd.str(), opt.timeoutMs, out, exitCode);
+}
+
+bool DismApiWrapper::getMountedImages(std::string& out, DWORD& exitCode) {
+    wstring dism = getSystemToolPath(L"dism.exe");
+    wstring cmd = L"\"" + dism + L"\" /Get-MountedImageInfo";
+    // This operation is typically fast, but we'll use a default timeout.
+    return runProcessCapture(cmd, 60000, out, exitCode);
+}
+
 bool DismApiWrapper::runProcessCapture(const wstring& command, DWORD timeoutMs, string& output, DWORD& exitCode) {
     SECURITY_ATTRIBUTES sa{}; sa.nLength = sizeof(sa); sa.bInheritHandle = TRUE; HANDLE hRead=NULL,hWrite=NULL;
     if (!CreatePipe(&hRead,&hWrite,&sa,0)) return false; SetHandleInformation(hRead,HANDLE_FLAG_INHERIT,0);

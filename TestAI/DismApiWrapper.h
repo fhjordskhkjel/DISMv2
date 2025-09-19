@@ -15,9 +15,15 @@ public:
         bool enableNoRestart = true;
         std::string scratchDir; // optional scratch dir
         int timeoutMs = 60 * 60 * 1000; // 60 min default
+        bool readOnly = false; // for mount-image
     };
 
     DismApiWrapper() = default;
+
+    // Image Management
+    bool mountImage(const std::string& wimPath, int index, const std::string& mountDir, const Options& opt, std::string& out, DWORD& exitCode);
+    bool unmountImage(const std::string& mountDir, bool commit, const Options& opt, std::string& out, DWORD& exitCode);
+    bool getMountedImages(std::string& out, DWORD& exitCode);
 
     // Package operations
     bool addPackage(const std::string& packagePath, const Options& opt, std::string& out, DWORD& exitCode);
