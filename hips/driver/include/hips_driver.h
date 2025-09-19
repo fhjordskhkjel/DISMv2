@@ -14,6 +14,9 @@
 // Driver version
 #define HIPS_DRIVER_VERSION 0x01000000  // Version 1.0.0.0
 
+// Maximum size constants for security
+#define UNICODE_STRING_MAX_BYTES 0x8000  // 32KB max for Unicode strings
+
 // Device control codes
 #define HIPS_DEVICE_TYPE 0x8000
 #define IOCTL_HIPS_GET_VERSION      CTL_CODE(HIPS_DEVICE_TYPE, 0x800, METHOD_BUFFERED, FILE_READ_DATA)
