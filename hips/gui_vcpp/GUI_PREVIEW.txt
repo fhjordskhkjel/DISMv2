@@ -1,50 +1,61 @@
-HIPS GUI Layout Preview
-======================
+HIPS GUI Layout Preview - Enhanced Edition
+========================================
 
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│  HIPS - Host Intrusion Prevention System v1.2.0                               │ [_][□][X]
+│  HIPS - Host Intrusion Prevention System v1.2.0 (Enhanced Edition)            │ [_][□][X]
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │  ┌─── Driver Status ─────────────────┐   ┌─── Monitoring Control ─────────────┐ │
 │  │                                   │   │                                     │ │
-│  │  Status: Monitoring Active        │   │  [Start Monitoring] [Stop Monitor] │ │
-│  │  Driver: Connected                 │   │                                     │ │
-│  │                                   │   │  [View Events]     [Configuration] │ │
-│  │  [Connect] [Disconnect] [Refresh] │   │                    [About]         │ │
+│  │  Status: 🟢 Monitoring Active      │   │  [▶ Start Monitoring] [⏹ Stop]    │ │
+│  │  Driver: 🔗 Connected              │   │                                     │ │
+│  │                                   │   │  [📊 View Events]  [⚙ Configuration] │ │
+│  │  [🔌 Connect] [❌ Disconnect] [🔄] │   │                    [ℹ About]       │ │
 │  │                                   │   │                                     │ │
 │  └───────────────────────────────────┘   └─────────────────────────────────────┘ │
 │                                                                                 │
-│  ┌─── Security Events ─────────────────────────────────────────────────────────┐ │
+│  ┌─── Security Events (Color-Coded Threat Levels) ───────────────────────────────┐ │
 │  │                                                                             │ │
-│  │  Time        │Event Type      │Threat Level│Process            │Target      │ │
-│  │──────────────┼────────────────┼────────────┼───────────────────┼────────────│ │
-│  │  14:32:15    │File Access     │Low         │notepad.exe        │file.txt    │ │
-│  │  14:32:16    │Process Created │Medium      │setup.exe          │N/A         │ │
-│  │  14:32:17    │Registry Mod.   │High        │malware.exe        │HKEY_RUN    │ │
-│  │  14:32:18    │File Written    │Critical    │unknown.exe        │system32\   │ │
+│  │  🟢│Time        │Event Type      │Threat Level│Process            │Target      │ │
+│  │──┼─────────────┼────────────────┼────────────┼───────────────────┼────────────│ │
+│  │🟢│ 14:32:15    │File Access     │🟢 Low      │notepad.exe        │file.txt    │ │
+│  │🟡│ 14:32:16    │Process Created │🟡 Medium   │setup.exe          │N/A         │ │
+│  │🟠│ 14:32:17    │Registry Mod.   │🟠 High     │malware.exe        │HKEY_RUN    │ │
+│  │🔴│ 14:32:18    │File Written    │🔴 Critical │unknown.exe        │system32\   │ │
 │  │                                                                             │ │
-│  │  [Showing 4 of 127 events - Auto-refresh: ON]                             │ │
+│  │  [Showing 4 of 127 events - Auto-refresh: ON] [Filter: All ▼] [Export...]  │ │
 │  │                                                                             │ │
 │  └─────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                 │
-│  ┌─── Activity Log ─────────────────────────────────────────────────────────────┐ │
+│  ┌─── Activity Log (Enhanced with Timestamps) ────────────────────────────────────┐ │
 │  │                                                                             │ │
-│  │  [14:30:15] HIPS GUI started. Ready to connect to driver.                  │ │
-│  │  [14:30:16] Connected to HIPS kernel driver successfully.                  │ │
-│  │  [14:30:16] Driver version: 1.0.0.0                                        │ │
-│  │  [14:30:17] Driver monitoring started successfully.                        │ │
-│  │  [14:32:18] Critical threat detected: unknown.exe accessing system32\     │ │
-│  │  [14:32:19] Status refreshed.                                              │ │
+│  │  [14:30:15] 🚀 HIPS GUI started. Enhanced interface ready.                  │ │
+│  │  [14:30:16] 🔗 Connected to HIPS kernel driver successfully.                │ │
+│  │  [14:30:16] ℹ️  Driver version: 1.0.0.0 - Enhanced stability features       │ │
+│  │  [14:30:17] ▶️  Driver monitoring started successfully.                      │ │
+│  │  [14:32:18] 🚨 Critical threat detected: unknown.exe accessing system32\    │ │
+│  │  [14:32:19] 🔄 Status refreshed. System secure.                             │ │
 │  │                                                                             │ │
 │  └─────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-Features:
-- Real-time driver status monitoring
-- Live security event display with color-coded threat levels
-- Comprehensive activity logging with timestamps
-- Intuitive button controls for driver management
-- Professional Windows MFC interface
-- Thread-safe communication with kernel driver
-- Automatic event refresh and status updates
+Enhanced Features:
+- ✅ Real-time driver status monitoring with visual indicators
+- ✅ Color-coded threat level display (🟢 Low, 🟡 Medium, 🟠 High, 🔴 Critical)
+- ✅ Enhanced activity logging with emoji indicators and timestamps  
+- ✅ Modern Windows 11 styling with Segoe UI font
+- ✅ Double-buffered list controls for smooth rendering
+- ✅ Visual Studio 2022 optimized build system
+- ✅ Bulletproof kernel driver with BSOD prevention
+- ✅ Thread-safe communication with comprehensive error handling
+- ✅ Automatic event refresh with improved responsiveness (1.5s intervals)
+- ✅ Enhanced button styling and modern iconography
+
+Technical Improvements:
+- 🛡️  BSOD-proof driver with enhanced exception handling
+- 🔒 Comprehensive buffer validation and memory leak prevention  
+- 🎨 Modern MFC interface with Windows 11 visual theming
+- ⚡ Optimized Visual Studio 2022 build pipeline
+- 🔍 Advanced threat level analysis with color coding
+- 📊 Real-time performance monitoring with minimal overhead
