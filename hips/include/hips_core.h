@@ -1,7 +1,48 @@
 #ifndef HIPS_CORE_H
 #define HIPS_CORE_H
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+// Cross-platform compatibility definitions for development
+#define DWORD unsigned long
+#define BOOL int
+#define TRUE 1
+#define FALSE 0
+#define BYTE unsigned char
+#define SIZE_T size_t
+#define HANDLE void*
+#define HKEY void*
+typedef struct {
+    DWORD dwLowDateTime;
+    DWORD dwHighDateTime;
+} FILETIME;
+typedef struct {
+    unsigned short wYear;
+    unsigned short wMonth;
+    unsigned short wDayOfWeek;
+    unsigned short wDay;
+    unsigned short wHour;
+    unsigned short wMinute;
+    unsigned short wSecond;
+    unsigned short wMilliseconds;
+} SYSTEMTIME;
+typedef struct {
+    void* Internal;
+    void* InternalHigh;
+    DWORD Offset;
+    DWORD OffsetHigh;
+    void* Pointer;
+    HANDLE hEvent;
+} OVERLAPPED;
+typedef struct {
+    DWORD NextEntryOffset;
+    DWORD Action;
+    DWORD FileNameLength;
+    wchar_t FileName[1];
+} FILE_NOTIFY_INFORMATION;
+#endif
+
 #include <string>
 #include <memory>
 #include <vector>

@@ -1,130 +1,56 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
+# Build directories
 build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+.build/
+Debug/
+Release/
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# Generated files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
+# IDE files
+.vs/
+.vscode/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.user
 
-# Translations
-*.mo
-*.pot
+# OS files
+.DS_Store
+Thumbs.db
 
-# Django stuff:
+# Logs
 *.log
-local_settings.py
-db.sqlite3
 
-# Flask stuff:
-instance/
-.webassets-cache
+# Temporary files
+*.tmp
+*.temp
+*~
 
-# Scrapy stuff:
-.scrapy
+# Doxygen output
+docs/html/
+docs/latex/
 
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# DISMv2 specific
-test_data/
-*.wim
-*.vhd
-*.vhdx
-*.esd
-.dismv2/
-scratch/
-mount/
-logs/
-temp/
-tmp/
+# Package files
+*.zip
+*.tar.gz
+*.tar.bz2
 
 # HIPS specific
 hips/build/

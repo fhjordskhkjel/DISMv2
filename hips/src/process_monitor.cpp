@@ -1,6 +1,8 @@
 #include "process_monitor.h"
+#ifdef _WIN32
 #include <tlhelp32.h>
 #include <psapi.h>
+#endif
 #include <iostream>
 #include <sstream>
 #include <algorithm>

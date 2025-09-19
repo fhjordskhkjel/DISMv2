@@ -2,10 +2,16 @@
 #define NETWORK_MONITOR_H
 
 #include "hips_core.h"
-#include <windows.h>
+#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
+#else
+// Cross-platform network compatibility
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 #include <string>
 #include <thread>
 #include <atomic>

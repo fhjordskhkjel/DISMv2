@@ -5,9 +5,10 @@ project(HIPS VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Ensure Windows-only build
+# Warn for non-Windows builds but allow for development/testing
 if(NOT WIN32)
-    message(FATAL_ERROR "HIPS system is designed for Windows only")
+    message(WARNING "HIPS system is primarily designed for Windows. Some features may not work on other platforms.")
+    add_definitions(-DCROSS_PLATFORM_BUILD)
 endif()
 
 # Set build type if not specified
@@ -23,7 +24,12 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()
     # MinGW/GCC options
-    add_compile_options(-Wall -Wextra -pedantic -Werror)
+    if(WIN32)
+        add_compile_options(-Wall -Wextra -pedantic -Werror)
+    else()
+        # Relaxed warnings for cross-platform development builds
+        add_compile_options(-Wall -Wextra)
+    endif()
 endif()
 
 # Include directories
@@ -59,15 +65,22 @@ set(HIPS_HEADERS
 add_library(hips_lib STATIC ${HIPS_SOURCES} ${HIPS_HEADERS})
 
 # Windows-specific libraries
-target_link_libraries(hips_lib
-    advapi32
-    kernel32
-    psapi
-    iphlpapi
-    ws2_32
-    user32
-    shell32
-)
+if(WIN32)
+    target_link_libraries(hips_lib
+        advapi32
+        kernel32
+        psapi
+        iphlpapi
+        ws2_32
+        user32
+        shell32
+    )
+else()
+    # For cross-platform development builds, link minimal libraries
+    target_link_libraries(hips_lib
+        pthread
+    )
+endif()
 
 # Main executable
 add_executable(hips src/main.cpp)
