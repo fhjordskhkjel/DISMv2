@@ -2,7 +2,6 @@
 #define FILE_MONITOR_H
 
 #include "hips_core.h"
-#include <windows.h>
 #include <string>
 #include <vector>
 #include <thread>

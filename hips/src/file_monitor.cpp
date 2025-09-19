@@ -1,7 +1,9 @@
 #include "file_monitor.h"
 #include <iostream>
 #include <sstream>
+#ifdef _WIN32
 #include <psapi.h>
+#endif
 #include <algorithm>
 #include <cctype>
 
