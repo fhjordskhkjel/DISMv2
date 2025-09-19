@@ -350,48 +350,89 @@ NTSTATUS HipsDispatchDeviceControl(
     PIO_STACK_LOCATION irpStack;
     ULONG inputBufferLength, outputBufferLength;
     PVOID inputBuffer, outputBuffer;
+    ULONG bytesReturned = 0;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
+    // Validate IRP and stack location
+    if (!Irp) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     irpStack = IoGetCurrentIrpStackLocation(Irp);
+    if (!irpStack) {
+        Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_PARAMETER;
+    }
+
     inputBufferLength = irpStack->Parameters.DeviceIoControl.InputBufferLength;
     outputBufferLength = irpStack->Parameters.DeviceIoControl.OutputBufferLength;
     inputBuffer = Irp->AssociatedIrp.SystemBuffer;
     outputBuffer = Irp->AssociatedIrp.SystemBuffer;
 
-    switch (irpStack->Parameters.DeviceIoControl.IoControlCode) {
-        case IOCTL_HIPS_GET_VERSION:
-            // Get driver version
-            if (outputBufferLength >= sizeof(ULONG)) {
-                *(PULONG)outputBuffer = HIPS_DRIVER_VERSION;
-                Irp->IoStatus.Information = sizeof(ULONG);
-            } else {
-                status = STATUS_BUFFER_TOO_SMALL;
-            }
-            break;
-
-        case IOCTL_HIPS_START_MONITORING:
-            // Start monitoring
-            if (g_DriverContext) {
-                g_DriverContext->MonitoringEnabled = TRUE;
-                DbgPrint("[HIPS] Monitoring started\n");
-            }
-            break;
-
-        case IOCTL_HIPS_STOP_MONITORING:
-            // Stop monitoring
-            if (g_DriverContext) {
-                g_DriverContext->MonitoringEnabled = FALSE;
-                DbgPrint("[HIPS] Monitoring stopped\n");
-            }
-            break;
-
-        default:
-            status = STATUS_INVALID_DEVICE_REQUEST;
-            break;
+    // Validate driver context
+    if (!g_DriverContext) {
+        status = STATUS_DEVICE_NOT_READY;
+        goto cleanup;
     }
 
+    __try {
+        switch (irpStack->Parameters.DeviceIoControl.IoControlCode) {
+            case IOCTL_HIPS_GET_VERSION:
+                // Get driver version
+                if (outputBufferLength >= sizeof(ULONG) && outputBuffer) {
+                    *(PULONG)outputBuffer = HIPS_DRIVER_VERSION;
+                    bytesReturned = sizeof(ULONG);
+                } else {
+                    status = STATUS_BUFFER_TOO_SMALL;
+                }
+                break;
+
+            case IOCTL_HIPS_START_MONITORING:
+                // Start monitoring
+                g_DriverContext->MonitoringEnabled = TRUE;
+                HipsDbgPrint("Monitoring started\n");
+                break;
+
+            case IOCTL_HIPS_STOP_MONITORING:
+                // Stop monitoring
+                g_DriverContext->MonitoringEnabled = FALSE;
+                HipsDbgPrint("Monitoring stopped\n");
+                break;
+
+            case IOCTL_HIPS_GET_EVENTS:
+                // Get events from queue
+                if (outputBuffer && outputBufferLength > 0) {
+                    status = HipsGetEvents(outputBuffer, outputBufferLength, &bytesReturned);
+                } else {
+                    status = STATUS_INVALID_PARAMETER;
+                }
+                break;
+
+            case IOCTL_HIPS_SET_CONFIG:
+                // Set configuration
+                if (inputBuffer && inputBufferLength >= sizeof(HIPS_CONFIG)) {
+                    status = HipsSetConfiguration(inputBuffer, inputBufferLength);
+                } else {
+                    status = STATUS_INVALID_PARAMETER;
+                }
+                break;
+
+            default:
+                status = STATUS_INVALID_DEVICE_REQUEST;
+                break;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+        HipsDbgPrint("Exception in device control: 0x%08X\n", status);
+        bytesReturned = 0;
+    }
+
+cleanup:
     Irp->IoStatus.Status = status;
+    Irp->IoStatus.Information = bytesReturned;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
     return status;
@@ -519,4 +560,53 @@ FLT_POSTOP_CALLBACK_STATUS HipsPostSetInfoCallback(
     UNREFERENCED_PARAMETER(Flags);
 
     return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
+/**
+ * Set driver configuration
+ */
+NTSTATUS HipsSetConfiguration(
+    _In_ PVOID InputBuffer,
+    _In_ ULONG InputBufferLength
+)
+{
+    PHIPS_CONFIG newConfig = (PHIPS_CONFIG)InputBuffer;
+    KIRQL oldIrql;
+
+    if (!InputBuffer || InputBufferLength < sizeof(HIPS_CONFIG) || !g_DriverContext) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    __try {
+        // Validate configuration values
+        if (newConfig->MaxEventQueueSize > 10000 || newConfig->MaxEventQueueSize == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (newConfig->EventTimeoutMs > 60000) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        // Safely update configuration
+        KeAcquireSpinLock(&g_DriverContext->Lock, &oldIrql);
+        
+        RtlCopyMemory(&g_DriverContext->Configuration, newConfig, sizeof(HIPS_CONFIG));
+        
+        KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
+        
+        HipsDbgPrint("Configuration updated successfully\n");
+        
+        return STATUS_SUCCESS;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        // If we acquired the spinlock, release it
+        if (KeGetCurrentIrql() >= DISPATCH_LEVEL) {
+            KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
+        }
+        
+        NTSTATUS status = GetExceptionCode();
+        HipsDbgPrint("Exception in HipsSetConfiguration: 0x%08X\n", status);
+        return status;
+    }
+}
 }

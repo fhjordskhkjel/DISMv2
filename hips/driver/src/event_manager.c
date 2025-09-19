@@ -104,6 +104,7 @@ NTSTATUS HipsGetEvents(
     ULONG bytesUsed = 0;
     ULONG eventCount = 0;
     PUCHAR buffer = (PUCHAR)OutputBuffer;
+    NTSTATUS status = STATUS_SUCCESS;
 
     if (!g_DriverContext || !OutputBuffer || !BytesReturned) {
         return STATUS_INVALID_PARAMETER;
@@ -111,32 +112,51 @@ NTSTATUS HipsGetEvents(
 
     *BytesReturned = 0;
 
-    KeAcquireSpinLock(&g_DriverContext->Lock, &oldIrql);
-
-    // Copy events from list to output buffer
-    while (!IsListEmpty(&g_DriverContext->EventList) && 
-           (bytesUsed + sizeof(HIPS_EVENT)) <= OutputBufferLength) {
-        
-        PLIST_ENTRY listEntry = RemoveHeadList(&g_DriverContext->EventList);
-        PHIPS_EVENT event = CONTAINING_RECORD(listEntry, HIPS_EVENT, ListEntry);
-        
-        // Copy event to output buffer
-        RtlCopyMemory(buffer + bytesUsed, event, sizeof(HIPS_EVENT));
-        bytesUsed += sizeof(HIPS_EVENT);
-        eventCount++;
-        
-        // Free the event
-        HipsFreeMemory(event);
-        g_DriverContext->EventCount--;
+    // Validate output buffer size
+    if (OutputBufferLength < sizeof(HIPS_EVENT)) {
+        return STATUS_BUFFER_TOO_SMALL;
     }
 
-    KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
+    __try {
+        KeAcquireSpinLock(&g_DriverContext->Lock, &oldIrql);
 
-    *BytesReturned = bytesUsed;
+        // Copy events from list to output buffer
+        while (!IsListEmpty(&g_DriverContext->EventList) && 
+               (bytesUsed + sizeof(HIPS_EVENT)) <= OutputBufferLength) {
+            
+            PLIST_ENTRY listEntry = RemoveHeadList(&g_DriverContext->EventList);
+            PHIPS_EVENT event = CONTAINING_RECORD(listEntry, HIPS_EVENT, ListEntry);
+            
+            // Copy event to output buffer with bounds checking
+            if (bytesUsed + sizeof(HIPS_EVENT) <= OutputBufferLength) {
+                RtlCopyMemory(buffer + bytesUsed, event, sizeof(HIPS_EVENT));
+                bytesUsed += sizeof(HIPS_EVENT);
+                eventCount++;
+            }
+            
+            // Free the event
+            HipsFreeMemory(event);
+            g_DriverContext->EventCount--;
+        }
+
+        KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
+
+        *BytesReturned = bytesUsed;
+        
+        HipsDbgPrint("Retrieved %lu events (%lu bytes)\n", eventCount, bytesUsed);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        // If we acquired the spinlock, release it
+        if (KeGetCurrentIrql() >= DISPATCH_LEVEL) {
+            KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
+        }
+        
+        status = GetExceptionCode();
+        HipsDbgPrint("Exception in HipsGetEvents: 0x%08X\n", status);
+        *BytesReturned = 0;
+    }
     
-    HipsDbgPrint("Retrieved %lu events (%lu bytes)\n", eventCount, bytesUsed);
-    
-    return STATUS_SUCCESS;
+    return status;
 }
 
 /**
