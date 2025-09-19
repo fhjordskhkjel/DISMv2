@@ -82,7 +82,12 @@ NTSTATUS HipsAllocateUnicodeString(
     _In_ USHORT MaximumLength
 )
 {
-    if (!UnicodeString) {
+    if (!UnicodeString || MaximumLength == 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // Validate maximum length to prevent excessive allocations
+    if (MaximumLength > UNICODE_STRING_MAX_BYTES) {
         return STATUS_INVALID_PARAMETER;
     }
     

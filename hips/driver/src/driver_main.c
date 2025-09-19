@@ -634,4 +634,4 @@ NTSTATUS HipsSetConfiguration(
         return status;
     }
 }
-}
+=======
