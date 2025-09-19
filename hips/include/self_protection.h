@@ -8,6 +8,12 @@
 #include <functional>
 #include <atomic>
 #include <mutex>
+#include <chrono>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace HIPS {
 
@@ -217,7 +223,40 @@ private:
     
     // BSOD-proof API wrappers
     template<typename T>
-    bool SafeExecuteAPICall(const std::string& api_name, T&& function, int max_retries = 3);
+    bool SafeExecuteAPICall(const std::string& api_name, T&& function, int max_retries = 3) {
+        if (!config_.safe_mode_enabled) {
+            try {
+                return function();
+            } catch (...) {
+                LogSafetyViolation(api_name, "Exception caught in non-safe mode");
+                return false;
+            }
+        }
+        
+        int retries = max_retries;
+        while (retries > 0) {
+            try {
+                return function();
+            } catch (const std::exception& e) {
+                retries--;
+                LogSafetyViolation(api_name, std::string("Exception: ") + e.what() + ", retries left: " + std::to_string(retries));
+                
+                if (retries > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            } catch (...) {
+                retries--;
+                LogSafetyViolation(api_name, "Unknown exception, retries left: " + std::to_string(retries));
+                
+                if (retries > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            }
+        }
+        
+        return false;
+    }
+    
     bool SafeGetProcessInformation(DWORD pid, std::string& process_name, std::string& process_path);
     bool SafeGetThreadInformation(DWORD tid, DWORD& owner_pid, bool& is_system_thread);
     bool IsSystemCriticalProcess(DWORD pid);
@@ -227,7 +266,19 @@ private:
 #ifdef _WIN32
     // SEH (Structured Exception Handling) wrapper
     template<typename T>
-    bool ExecuteWithSEH(T&& function, const std::string& operation_name);
+    bool ExecuteWithSEH(T&& function, const std::string& operation_name) {
+        if (!config_.seh_protection_enabled) {
+            return function();
+        }
+        
+        __try {
+            return function();
+        }
+        __except (SelfProtectionSEHFilter(GetExceptionInformation())) {
+            LogSafetyViolation(operation_name, "SEH exception caught and handled");
+            return false;
+        }
+    }
     
     // Windows-specific protection
     void SetupWindowsProcessProtection();

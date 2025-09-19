@@ -49,8 +49,13 @@ SelfProtectionEngine::~SelfProtectionEngine() {
 }
 
 bool SelfProtectionEngine::Initialize() {
+    if (initialized_.load()) {
+        return true;
+    }
+    
     std::lock_guard<std::mutex> lock(config_mutex_);
     
+    // Double-check after acquiring lock
     if (initialized_.load()) {
         return true;
     }
@@ -76,12 +81,6 @@ bool SelfProtectionEngine::Initialize() {
         config_.validate_handles = true;
         config_.check_thread_integrity = true;
         config_.monitor_critical_sections = true;
-        
-        // Add default protected resources
-        AddDefaultProtectedResources();
-        
-        // Load default protection rules
-        LoadDefaultProtectionRules();
         
         initialized_.store(true);
         return true;
@@ -513,59 +512,9 @@ bool SelfProtectionEngine::CheckThreadIsAlive(DWORD tid) {
 #endif
 }
 
-// Generic safe API call wrapper with retry logic
-template<typename T>
-bool SelfProtectionEngine::SafeExecuteAPICall(const std::string& api_name, T&& function, int max_retries) {
-    if (!config_.safe_mode_enabled) {
-        try {
-            return function();
-        } catch (...) {
-            LogSafetyViolation(api_name, "Exception caught in non-safe mode");
-            return false;
-        }
-    }
-    
-    int retries = max_retries;
-    while (retries > 0) {
-        try {
-            return function();
-        } catch (const std::exception& e) {
-            retries--;
-            LogSafetyViolation(api_name, std::string("Exception: ") + e.what() + ", retries left: " + std::to_string(retries));
-            
-            if (retries > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-        } catch (...) {
-            retries--;
-            LogSafetyViolation(api_name, "Unknown exception, retries left: " + std::to_string(retries));
-            
-            if (retries > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-        }
-    }
-    
-    return false;
-}
+// Generic safe API call wrapper is now in header for template instantiation
 
-#ifdef _WIN32
-// SEH wrapper for critical Windows API calls
-template<typename T>
-bool SelfProtectionEngine::ExecuteWithSEH(T&& function, const std::string& operation_name) {
-    if (!config_.seh_protection_enabled) {
-        return function();
-    }
-    
-    __try {
-        return function();
-    }
-    __except (SelfProtectionSEHFilter(GetExceptionInformation())) {
-        LogSafetyViolation(operation_name, "SEH exception caught and handled");
-        return false;
-    }
-}
-#endif
+// SEH wrapper is now in header for template instantiation
 
 bool SelfProtectionEngine::IsSystemCriticalProcess(DWORD pid) {
 #ifdef _WIN32
