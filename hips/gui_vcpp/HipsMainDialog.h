@@ -57,6 +57,10 @@ private:
 	void UpdateControls();
 	void LogMessage(const CString& message);
 	void RefreshEventList();
+	void CreateThreatLevelIcons();
+	void ApplyEnhancedStyling();
+	COLORREF GetThreatLevelColor(DWORD threatLevel);
+	int GetThreatLevelIcon(DWORD threatLevel);
 
 public:
 	// Control variables
@@ -68,4 +72,7 @@ public:
 	CButton m_disconnectButton;
 	CListCtrl m_eventList;
 	CEdit m_logEdit;
+	
+	// Enhanced UI elements
+	CImageList m_threatImageList;
 };
