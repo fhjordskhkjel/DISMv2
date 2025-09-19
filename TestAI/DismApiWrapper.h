@@ -13,7 +13,8 @@ public:
         bool forceUnsigned = false; // driver install safety
         bool skipRestart = true;
         bool enableNoRestart = true;
-        std::string scratchDir; // optional scratch dir
+        std::string scratchDir; // optional scratch dir (/ScratchDir)
+        std::string logPath;    // optional log file (/LogPath)
         int timeoutMs = 60 * 60 * 1000; // 60 min default
         bool readOnly = false; // for mount-image
     };
@@ -59,4 +60,5 @@ private:
     static std::wstring quote(const std::wstring& p);
     static std::wstring onOff(const Options& opt);
     static std::wstring imageArg(const Options& opt);
+    static std::wstring commonArgs(const Options& opt);
 };

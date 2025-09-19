@@ -35,7 +35,8 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - New component servicing commands (feature/capability/driver/provisioned appx) with optional JSON output
 - Diagnostics: tail-cbs-logs to quickly view CBS/DISM logs
 - Built-in help system: `help` and `help <command>` for detailed usage.
-- Image management commands: `mount-image`, `unmount-image`, `get-mounted-images`.
+- Image management commands: `mount-image`, `unmount-image`, `get-mounted-images`
+- UX and logging: colorized console output (disable with `--no-color`), JSON output for image commands, and rotating file logs when `--log` is used
 
 ## Commands
 - `help [command]` - Displays a list of commands or help for a specific command.
@@ -61,9 +62,9 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
   - `tail-cbs-logs [N]` — show last N lines (default 200) of CBS.log and DISM.log
   - `diag` — Dump OS, DISM, and Servicing Stack versions.
 - Image Management:
-  - `mount-image /ImageFile:<wim> /Index:<index> /MountDir:<path> [/ReadOnly]`
-  - `unmount-image /MountDir:<path> [/Commit|/Discard]`
-  - `get-mounted-images`
+  - `mount-image /ImageFile:<wim> /Index:<index> /MountDir:<path> [/ReadOnly] [--json]`
+  - `unmount-image /MountDir:<path> [/Commit|/Discard] [--json]`
+  - `get-mounted-images [--json]`
 
 ## add-package-enhanced options
 - `/CBS` or `--cbs-integration`: CBS-style installation
@@ -75,6 +76,11 @@ A modern C++20 Windows package tool with first-class support for CAB, MSU, PSF/A
 - `--no-powershell`, `--no-wusa`, `--no-7z`
 - `--no-catalog-register` (disable system catalog registration)
 - `--timeout-ms <int>` (override external tool timeouts)
+
+## UX and Logging
+- Colorized console output for success/warning/error. Use `--no-color` to disable.
+- When `--log <file>` is provided, outputs are appended and rotated at ~5 MB.
+- Image management commands support `--json` for machine-readable output.
 
 ## Built-in Help
 - Run `DISMv2.exe help` to see a full list of available commands.

@@ -34,7 +34,58 @@ namespace {
         std::string wimTemp;
         bool wimProgress = false;
         bool diagEnabled = false; // NEW: enable diagnostics dump
+        bool noColor = false;     // NEW: disable color output
     } g_opts;
+
+    // Simple logger with size-based rotation (5 MB)
+    struct SimpleLogger {
+        std::ofstream file;
+        const std::uintmax_t rotateBytes = 5ull * 1024ull * 1024ull;
+        void openIfNeeded() {
+            if (g_opts.logPath.empty()) return;
+            try {
+                fs::path p(g_opts.logPath);
+                fs::create_directories(p.parent_path());
+                if (fs::exists(p) && fs::file_size(p) > rotateBytes) {
+                    fs::path bak = p; bak += ".bak";
+                    std::error_code ec; fs::rename(p, bak, ec);
+                }
+                if (!file.is_open()) file.open(g_opts.logPath, std::ios::app | std::ios::binary);
+            } catch (...) {
+            }
+        }
+        void log(const std::string& line) {
+            if (g_opts.logPath.empty()) return;
+            if (!file.is_open()) openIfNeeded();
+            if (file.is_open()) { file << line << "\n"; file.flush(); }
+        }
+    } g_logger;
+
+    // Console color helpers
+    WORD g_defaultAttr = 0; bool g_colorInitialized = false;
+    void initConsoleColors() {
+        if (g_colorInitialized) return; g_colorInitialized = true;
+        HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_SCREEN_BUFFER_INFO info{};
+        if (GetConsoleScreenBufferInfo(h, &info)) g_defaultAttr = info.wAttributes; else g_defaultAttr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+    }
+    void setColor(WORD attr) {
+        if (g_opts.noColor) return; initConsoleColors(); SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), attr);
+    }
+    void resetColor() { if (g_opts.noColor) return; initConsoleColors(); SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), g_defaultAttr); }
+
+    void printSuccess(const std::string& msg) {
+        setColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY); std::cout << msg << "\n"; resetColor();
+        g_logger.log(msg);
+    }
+    void printError(const std::string& msg) {
+        setColor(FOREGROUND_RED | FOREGROUND_INTENSITY); std::cerr << msg << "\n"; resetColor();
+        g_logger.log(msg);
+    }
+    void printWarning(const std::string& msg) {
+        setColor(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); std::cout << msg << "\n"; resetColor();
+        g_logger.log(msg);
+    }
 
     // Resolve package path: absolute, search exe dir if needed
     std::string resolvePackagePath(const std::string& original) {
@@ -113,6 +164,7 @@ namespace {
         if (!g_opts.logPath.empty()) {
             SetEnvironmentVariableA("DISMV2_LOG", g_opts.logPath.c_str());
             if (cbs) cbs->enableCbsLogging(g_opts.logPath);
+            g_logger.openIfNeeded();
         }
         if (!g_opts.timeoutMs.empty()) {
             SetEnvironmentVariableA("DISMV2_TIMEOUT_MS", g_opts.timeoutMs.c_str());
@@ -167,8 +219,9 @@ namespace {
                 g_opts.wimProgress = true;
             } else if (arg == "--diag") {
                 // Diagnostics option, no additional parameters
-                // Just enable the flag
                 g_opts.diagEnabled = true;
+            } else if (arg == "--no-color") {
+                g_opts.noColor = true;
             }
         }
         return 0;
@@ -242,6 +295,7 @@ void printUsage() {
     std::cout << "  --wim-temp <path>                   - Set temporary path for WIM operations\n";
     std::cout << "  --wim-progress                      - Log WIM progress to console\n";
     std::cout << "  --diag                               - Dump OS build, DISM version, servicing stack version\n";
+    std::cout << "  --no-color                           - Disable colorized console output\n";
 }
 
 void printCommandList() {
@@ -554,7 +608,8 @@ int main(int argc, char* argv[]) {
     if (parseResult != 0) {
         return parseResult;
     }
-    
+    applyGlobalOptions(nullptr);
+
     if (command.empty()) {
         std::cerr << "Error: Empty command provided\n";
         printUsage();
@@ -1512,7 +1567,7 @@ int main(int argc, char* argv[]) {
             auto t1 = std::chrono::high_resolution_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
             if (json) {
-                std::ostringstream js; js << "{\"command\":\"" << command << "\",\"feature\":\"" << feature << "\",\"success\":" << ((ok && code==0)?"true":"false") << ",\"exitCode\":" << code << ",\"durationMs\":" << ms << "}"; 
+                std::ostringstream js; js << "{\"command\":\"" << command << "\",\"feature\":\"" << feature << "\",\"success\":" << ((ok && code == 0)?"true":"false") << ",\"exitCode\":" << code << ",\"durationMs\":" << ms << "}"; 
                 std::cout << js.str() << "\n";
                 if (!ok || code != 0) return 1; else return 0;
             }
@@ -1537,7 +1592,17 @@ int main(int argc, char* argv[]) {
             if (argc < 3) { std::cerr << "Error: Package path/name required\n"; return 1; }
             std::string value = argv[2];
             DismApiWrapper::Options opt; opt.online = true; opt.timeoutMs = g_opts.timeoutMs.empty() ? opt.timeoutMs : std::atoi(g_opts.timeoutMs.c_str());
-            for (int i = 3; i < argc; ++i) { std::string a = argv[i]; if (a == "/Online") opt.online=true; else if (a == "/Offline") opt.online=false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} else if (a == "--json") json = true; }
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (a == "/Online") opt.online=true; 
+                else if (a == "/Offline") opt.online=false; 
+                else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} 
+                else if (a.rfind("/ScratchDir:",0)==0) { opt.scratchDir = a.substr(12);} 
+                else if (a.rfind("/LogPath:",0)==0) { opt.logPath = a.substr(9);} 
+                else if (a == "--json") json = true; 
+            }
+            // Default /LogPath to global --log if not explicitly set
+            if (opt.logPath.empty() && !g_opts.logPath.empty()) opt.logPath = g_opts.logPath;
             DismApiWrapper dism; std::string out; DWORD code=1; bool ok; auto t0=std::chrono::high_resolution_clock::now();
             if (command == "add-package-dism") ok = dism.addPackage(value, opt, out, code); else ok = dism.removePackage(value, opt, out, code);
             auto t1=std::chrono::high_resolution_clock::now(); auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
@@ -1590,6 +1655,7 @@ int main(int argc, char* argv[]) {
             std::cout << "[SUCCESS] Provisioned app removed in " << ms << " ms\n";
         }
         else if (command == "mount-image") {
+            bool json = false;
             if (argc < 5) { std::cerr << "Error: Missing arguments for mount-image.\n"; printCommandHelp("mount-image"); return 1; }
             std::string wim, mountDir; int index = 0; DismApiWrapper::Options opt;
             for (int i = 2; i < argc; ++i) {
@@ -1598,19 +1664,26 @@ int main(int argc, char* argv[]) {
                 else if (a.rfind("/MountDir:", 0) == 0) mountDir = a.substr(10);
                 else if (a.rfind("/Index:", 0) == 0) index = std::atoi(a.substr(7).c_str());
                 else if (a == "/ReadOnly") opt.readOnly = true;
+                else if (a == "--json") json = true;
             }
             if (wim.empty() || mountDir.empty() || index == 0) { std::cerr << "Error: /ImageFile, /MountDir, and /Index are required.\n"; return 1; }
             
             DismApiWrapper dism; std::string out; DWORD code = 1;
-            if (dism.mountImage(wim, index, mountDir, opt, out, code) && code == 0) {
-                std::cout << "[SUCCESS] Image mounted successfully.\n";
-                if (g_opts.verbose) std::cout << out << "\n";
-            } else {
-                std::cerr << "[FAILED] Failed to mount image (code " << code << ").\n" << out << "\n";
-                return 1;
+            auto t0 = std::chrono::high_resolution_clock::now();
+            bool ok = dism.mountImage(wim, index, mountDir, opt, out, code) && code == 0;
+            auto t1 = std::chrono::high_resolution_clock::now(); auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
+            if (!g_opts.logPath.empty()) { g_logger.log("[mount-image] " + out); }
+            if (json) {
+                std::ostringstream js; js << "{\"command\":\"mount-image\",\"success\":" << (ok?"true":"false")
+                    << ",\"exitCode\":" << code << ",\"durationMs\":" << ms << 
+                    ",\"imageFile\":\"" << wim << "\",\"index\":" << index << ",\"mountDir\":\"" << mountDir << "\"}";
+                std::cout << js.str() << "\n"; return ok?0:1;
             }
+            if (ok) { printSuccess("[SUCCESS] Image mounted successfully."); if (g_opts.verbose) std::cout << out << "\n"; }
+            else { printError("[FAILED] Failed to mount image (code " + std::to_string(code) + ")."); std::cerr << out << "\n"; return 1; }
         }
         else if (command == "unmount-image") {
+            bool json = false;
             if (argc < 3) { std::cerr << "Error: Missing arguments for unmount-image.\n"; printCommandHelp("unmount-image"); return 1; }
             std::string mountDir; bool commit = false;
             for (int i = 2; i < argc; ++i) {
@@ -1618,26 +1691,36 @@ int main(int argc, char* argv[]) {
                 if (a.rfind("/MountDir:", 0) == 0) mountDir = a.substr(10);
                 else if (a == "/Commit") commit = true;
                 else if (a == "/Discard") commit = false;
+                else if (a == "--json") json = true;
             }
             if (mountDir.empty()) { std::cerr << "Error: /MountDir is required.\n"; return 1; }
 
-            DismApiWrapper dism; std::string out; DWORD code = 1; DismApiWrapper::Options opt;
-            if (dism.unmountImage(mountDir, commit, opt, out, code) && code == 0) {
-                std::cout << "[SUCCESS] Image unmounted successfully.\n";
-                if (g_opts.verbose) std::cout << out << "\n";
-            } else {
-                std::cerr << "[FAILED] Failed to unmount image (code " << code << ").\n" << out << "\n";
-                return 1;
+            DismApiWrapper dism; std::string out; DWORD code = 1; DismApiWrapper::Options opt; auto t0=std::chrono::high_resolution_clock::now();
+            bool ok = dism.unmountImage(mountDir, commit, opt, out, code) && code == 0; auto t1=std::chrono::high_resolution_clock::now(); auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
+            if (!g_opts.logPath.empty()) { g_logger.log("[unmount-image] " + out); }
+            if (json) {
+                std::ostringstream js; js << "{\"command\":\"unmount-image\",\"success\":" << (ok?"true":"false")
+                    << ",\"exitCode\":" << code << ",\"durationMs\":" << ms << 
+                    ",\"mountDir\":\"" << mountDir << "\",\"commit\":" << (commit?"true":"false") << "}";
+                std::cout << js.str() << "\n"; return ok?0:1;
             }
+            if (ok) { printSuccess("[SUCCESS] Image unmounted successfully."); if (g_opts.verbose) std::cout << out << "\n"; }
+            else { printError("[FAILED] Failed to unmount image (code " + std::to_string(code) + ")."); std::cerr << out << "\n"; return 1; }
         }
         else if (command == "get-mounted-images") {
-            DismApiWrapper dism; std::string out; DWORD code = 1;
-            if (dism.getMountedImages(out, code) && code == 0) {
-                std::cout << "Mounted Images:\n" << out << "\n";
-            } else {
-                std::cerr << "[FAILED] Failed to get mounted images (code " << code << ").\n" << out << "\n";
-                return 1;
+            bool json = false; for (int i=2;i<argc;++i){ if (std::string(argv[i])=="--json") json=true; }
+            DismApiWrapper dism; std::string out; DWORD code = 1; auto t0=std::chrono::high_resolution_clock::now();
+            bool ok = dism.getMountedImages(out, code) && code == 0; auto t1=std::chrono::high_resolution_clock::now(); auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
+            if (!g_opts.logPath.empty()) { g_logger.log("[get-mounted-images] " + out); }
+            if (json) {
+                std::ostringstream js; js << "{\"command\":\"get-mounted-images\",\"success\":" << (ok?"true":"false")
+                    << ",\"exitCode\":" << code << ",\"durationMs\":" << ms << ",\"raw\":\"";
+                // escape quotes/newlines minimally
+                for (char c : out) { if (c=='\\' || c=='\"') js << '\\' << c; else if (c=='\n') js << "\\n"; else if (c=='\r') js << "\\r"; else js << c; }
+                js << "\"}"; std::cout << js.str() << "\n"; return ok?0:1;
             }
+            if (ok) { std::cout << "Mounted Images:\n" << out << "\n"; }
+            else { printError("[FAILED] Failed to get mounted images (code " + std::to_string(code) + ")."); std::cerr << out << "\n"; return 1; }
         }
         else if (command == "tail-cbs-logs") {
             int lines = 200;
@@ -1737,7 +1820,7 @@ int main(int argc, char* argv[]) {
         }
     }
     catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        printError(std::string("Error: ") + e.what());
         return 1;
     }
 
