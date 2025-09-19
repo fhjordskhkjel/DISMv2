@@ -4,9 +4,52 @@
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-lightgrey)](https://github.com/fhjordskhkjel/DISMv2)
 
+This repository contains two distinct security tools:
+
+1. **DISMv2**: A cross-platform implementation of Microsoft's Deployment Image Servicing and Management (DISM) tool
+2. **Advanced HIPS**: A comprehensive Host Intrusion Prevention System for Windows enterprise environments
+
+## DISMv2 Tool
+
 DISMv2 is a cross-platform implementation of Microsoft's Deployment Image Servicing and Management (DISM) tool. It provides all the core functionality of DISM while being compatible with Windows, Linux, and macOS systems.
 
-## Features
+## Advanced HIPS (Host Intrusion Prevention System)
+
+**🚨 NEW: Enterprise-Grade Windows Security Solution**
+
+The Advanced HIPS system is a comprehensive Windows-only Host Intrusion Prevention System designed for enterprise environments. It provides real-time monitoring and protection against:
+
+### 🛡️ Core Protection Features
+- **Real-time File System Monitoring**: Monitor file access, modifications, and deletions
+- **Advanced Process Monitoring**: Detect suspicious process behavior and injection attempts  
+- **Network Traffic Analysis**: Monitor network connections and detect suspicious activity
+- **Registry Protection**: Protect critical registry keys from unauthorized modifications
+- **Memory Protection**: Prevent memory injection and exploit attempts
+- **Behavioral Analysis**: Detect advanced persistent threats and zero-day exploits
+
+### 🎯 Key Advantages
+- **Windows-Native**: Built specifically for Windows using Win32 APIs
+- **Enterprise-Ready**: Designed for large-scale deployments with centralized management
+- **Highly Customizable**: Flexible rule engine for custom security policies
+- **Performance Optimized**: Minimal system impact with intelligent filtering
+- **Comprehensive Testing**: Enterprise-level test suite ensuring reliability
+
+### 📁 HIPS Location
+The Advanced HIPS system is located in the `/hips` directory. See [hips/docs/README.md](hips/docs/README.md) for complete documentation.
+
+### 🚀 Quick Start (HIPS)
+```bash
+cd hips
+build.bat          # Windows build script
+# OR
+mkdir build && cd build
+cmake ..
+cmake --build . --config Release
+```
+
+---
+
+## DISMv2 Features (Original Tool)
 
 ### 🖼️ Image Management
 - Mount and unmount WIM, VHD, and VHDX images

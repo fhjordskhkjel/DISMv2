@@ -125,3 +125,9 @@ mount/
 logs/
 temp/
 tmp/
+
+# HIPS specific
+hips/build/
+hips/install/
+hips/*.log
+hips/config/test_config.json
