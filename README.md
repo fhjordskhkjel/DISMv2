@@ -31,6 +31,19 @@ The Advanced HIPS system is a comprehensive Windows-only Host Intrusion Preventi
 ### 📁 HIPS Documentation
 The complete HIPS documentation is located in [hips/docs/README.md](hips/docs/README.md).
 
+## 🔧 Development Tools Support
+
+### Visual Studio 2022 Integration
+- Complete VS2022 solution with user-mode and kernel driver projects
+- Integrated WDK support for kernel development
+- IntelliSense support for both user and kernel code
+- Integrated debugging for kernel drivers
+
+### Build Systems
+- **Visual Studio 2022**: Native MSBuild support with WDK integration
+- **CMake**: Cross-platform build system with VS2022 generator support
+- **Batch Scripts**: Automated build scripts for complete system compilation
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -120,15 +133,24 @@ AdvancedHIPS.sln
 
 ## Architecture
 
-The HIPS system is built with a modular architecture consisting of:
+The HIPS system is built with a hybrid architecture consisting of both user-mode and kernel-mode components:
 
-### Core Components
+### Kernel-Mode Components (NEW!)
+- **HipsDriver**: Minifilter driver providing kernel-level monitoring
+  - **File System Monitor**: Real-time file operations monitoring via minifilter
+  - **Process Monitor**: Process creation/termination callbacks
+  - **Registry Monitor**: Registry modification monitoring
+  - **Rule Engine**: Real-time security rule evaluation and blocking
+  - **Event Manager**: Secure kernel-to-user event communication
+
+### User-Mode Components
 - **HIPSEngine**: Central orchestration and event processing
-- **FileSystemMonitor**: File system activity monitoring
-- **ProcessMonitor**: Process lifecycle and behavior monitoring
+- **FileSystemMonitor**: Enhanced file system activity monitoring
+- **ProcessMonitor**: Process lifecycle and behavior monitoring  
 - **NetworkMonitor**: Network traffic and connection monitoring
-- **RegistryMonitor**: Windows registry modification monitoring
+- **RegistryMonitor**: Enhanced Windows registry modification monitoring
 - **MemoryProtector**: Memory injection and exploit protection
+- **DriverInterface**: Communication bridge to kernel driver
 
 ### Support Components
 - **ConfigManager**: Configuration management and persistence

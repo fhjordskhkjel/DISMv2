@@ -172,6 +172,18 @@ NTSTATUS DriverEntry(
     g_DriverContext->MonitoringEnabled = FALSE;
     KeInitializeSpinLock(&g_DriverContext->Lock);
     InitializeListHead(&g_DriverContext->EventList);
+    InitializeListHead(&g_DriverContext->RuleList);
+    
+    // Initialize configuration with defaults
+    RtlZeroMemory(&g_DriverContext->Configuration, sizeof(HIPS_CONFIG));
+    g_DriverContext->Configuration.MonitorFileSystem = TRUE;
+    g_DriverContext->Configuration.MonitorProcesses = TRUE;
+    g_DriverContext->Configuration.MonitorRegistry = TRUE;
+    g_DriverContext->Configuration.MonitorNetwork = FALSE; // Will be implemented later
+    g_DriverContext->Configuration.MonitorMemory = FALSE;  // Will be implemented later
+    g_DriverContext->Configuration.MinimumThreatLevel = HIPS_THREAT_LOW;
+    g_DriverContext->Configuration.MaxEventQueueSize = 1000;
+    g_DriverContext->Configuration.EventTimeoutMs = 5000;
 
     // Register filter
     status = FltRegisterFilter(DriverObject, &FilterRegistration, &g_FilterHandle);
@@ -192,6 +204,24 @@ NTSTATUS DriverEntry(
         return status;
     }
 
+    // Register process callbacks
+    status = HipsRegisterProcessCallbacks();
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[HIPS] Failed to register process callbacks: 0x%08X\n", status);
+    }
+
+    // Register registry callbacks
+    status = HipsRegisterRegistryCallbacks();
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[HIPS] Failed to register registry callbacks: 0x%08X\n", status);
+    }
+    
+    // Initialize default security rules
+    status = HipsInitializeDefaultRules();
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[HIPS] Failed to initialize default rules: 0x%08X\n", status);
+    }
+
     DbgPrint("[HIPS] Driver loaded successfully\n");
     return STATUS_SUCCESS;
 }
@@ -206,6 +236,13 @@ VOID HipsDriverUnload(
     UNREFERENCED_PARAMETER(DriverObject);
 
     DbgPrint("[HIPS] Driver unloading...\n");
+
+    // Unregister callbacks
+    HipsUnregisterProcessCallbacks();
+    HipsUnregisterRegistryCallbacks();
+    
+    // Clean up rules
+    HipsCleanupRules();
 
     // Stop filtering and unregister filter
     if (g_FilterHandle != NULL) {

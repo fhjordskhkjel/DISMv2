@@ -148,6 +148,38 @@ VOID HipsUnregisterRegistryCallbacks(void);
 NTSTATUS HipsRegisterImageCallbacks(void);
 VOID HipsUnregisterImageCallbacks(void);
 
+// Rule management functions
+NTSTATUS HipsAddRule(
+    _In_ PHIPS_RULE Rule
+);
+
+NTSTATUS HipsRemoveRule(
+    _In_ ULONG RuleId
+);
+
+PHIPS_RULE HipsFindRule(
+    _In_ HIPS_EVENT_TYPE EventType,
+    _In_opt_ PCWSTR Pattern
+);
+
+NTSTATUS HipsInitializeDefaultRules(void);
+VOID HipsCleanupRules(void);
+
+NTSTATUS HipsGetRuleStatistics(
+    _Out_ PULONG RuleCount,
+    _Out_ PULONG EnabledRuleCount
+);
+
+NTSTATUS HipsSetRuleEnabled(
+    _In_ ULONG RuleId,
+    _In_ BOOLEAN Enabled
+);
+
+NTSTATUS HipsSetRuleAction(
+    _In_ ULONG RuleId,
+    _In_ HIPS_ACTION_TYPE Action
+);
+
 // Event management functions
 NTSTATUS HipsAddEvent(
     _In_ HIPS_EVENT_TYPE EventType,
