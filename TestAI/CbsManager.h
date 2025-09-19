@@ -191,7 +191,10 @@ private:
     std::optional<std::string> logFilePath;
     mutable std::mutex errorLogMutex;
     OperationStats lastStats{};
-    
+
+    // Track reboot requirement when scheduling delayed replacements
+    bool rebootRequired = false;
+
     // COM interfaces for CBS
     CComPtr<IUnknown> cbsSession;
     CComPtr<IUnknown> cbsStore;

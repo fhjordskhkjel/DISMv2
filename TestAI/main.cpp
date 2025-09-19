@@ -1180,7 +1180,10 @@ int main(int argc, char* argv[]) {
                         std::cout << "Restart Required: " << (result.needsRestart ? "YES" : "NO") << "\n";
                         
                         if (result.needsRestart && onlineMode) {
-                            std::cout << "\n[WARNING] System restart required to complete installation\n";
+                            std::cout << "\n[WARNING] A system restart is required to replace files in use.\n";
+                            std::cout << "Please reboot at your earliest convenience to finalize the installation.\n";
+                        } else if (!onlineMode && result.needsRestart) {
+                            std::cout << "\n[INFO] Restart the target image after deployment to complete file replacement.\n";
                         } else if (!onlineMode) {
                             std::cout << "\nOffline image updated successfully - no restart required\n";
                         }
@@ -1594,12 +1597,7 @@ int main(int argc, char* argv[]) {
             DismApiWrapper::Options opt; opt.online = true; opt.timeoutMs = g_opts.timeoutMs.empty() ? opt.timeoutMs : std::atoi(g_opts.timeoutMs.c_str());
             for (int i = 3; i < argc; ++i) {
                 std::string a = argv[i];
-                if (a == "/Online") opt.online=true; 
-                else if (a == "/Offline") opt.online=false; 
-                else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} 
-                else if (a.rfind("/ScratchDir:",0)==0) { opt.scratchDir = a.substr(12);} 
-                else if (a.rfind("/LogPath:",0)==0) { opt.logPath = a.substr(9);} 
-                else if (a == "--json") json = true; 
+                if (a == "/Online") opt.online=true; else if (a == "/Offline") opt.online=false; else if (a.rfind("/Image:",0)==0) { opt.online=false; opt.imagePath = a.substr(7);} else if (a.rfind("/ScratchDir:",0)==0) { opt.scratchDir = a.substr(12);} else if (a.rfind("/LogPath:",0)==0) { opt.logPath = a.substr(9);} else if (a == "--json") json = true; 
             }
             // Default /LogPath to global --log if not explicitly set
             if (opt.logPath.empty() && !g_opts.logPath.empty()) opt.logPath = g_opts.logPath;

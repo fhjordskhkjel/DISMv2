@@ -768,9 +768,11 @@ CbsInstallResult CbsManager::installPackageWithCbs(const std::string& packagePat
         appendToErrorLog("Phase: cleanup staging ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count()));
         
         result.success = true;
-        result.needsRestart = std::any_of(packageInfo->components.begin(), 
+        // Merge restart signals: component metadata OR delayed replacements captured during install
+        bool compNeeds = std::any_of(packageInfo->components.begin(), 
                                         packageInfo->components.end(),
                                         [](const auto& comp) { return comp.needsRestart; });
+        result.needsRestart = compNeeds || rebootRequired;
         
         appendToErrorLog("CBS-integrated installation completed successfully");
         appendToErrorLog("  Installed components: " + std::to_string(result.installedComponents.size()));
@@ -877,6 +879,20 @@ namespace {
         }
         if (!CopyFileW(wsrc.c_str(), wdst.c_str(), overwrite ? FALSE : TRUE)) {
             DWORD err = GetLastError();
+            if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION || err == ERROR_USER_MAPPED_FILE) {
+                // Try to schedule replacement on reboot using MoveFileEx with MOVEFILE_DELAY_UNTIL_REBOOT
+                std::wstring tempDst = wdst + L".dismv2.tmp";
+                SetFileAttributesW(tempDst.c_str(), FILE_ATTRIBUTE_NORMAL);
+                DeleteFileW(tempDst.c_str());
+                if (CopyFileW(wsrc.c_str(), tempDst.c_str(), FALSE)) {
+                    if (MoveFileExW(tempDst.c_str(), wdst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_DELAY_UNTIL_REBOOT)) {
+                        if (log) *log += " scheduled replace on reboot";
+                        return true;
+                    } else {
+                        DeleteFileW(tempDst.c_str());
+                    }
+                }
+            }
             if (log) *log += (" copy failed:" + std::to_string(err));
             return false;
         }
@@ -1026,6 +1042,7 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
     std::vector<fs::path> copiedCatalogTargets;
     std::vector<fs::path> specialComponents; // .appx/.msix/.psf/.wim/.esd
     bool bootFilesChanged = false;
+    bool anyDelayedReplace = false;
 
     // Collect all payload files first (excluding .mum/.cat/specials)
     std::vector<fs::path> payload;
@@ -1073,9 +1090,9 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
             std::wstring wdst = dstOpt->wstring();
             std::string log;
             if (CopyFileLongPath(wsrc, wdst, /*overwrite*/true, &log)) {
-                // Count and boot flag
                 std::lock_guard<std::mutex> lg(countersMu);
                 ++copied;
+                if (log.find("scheduled replace on reboot") != std::string::npos) anyDelayedReplace = true;
                 auto wstr = dstOpt->wstring();
                 std::wstring low = wstr; std::transform(low.begin(), low.end(), low.begin(), ::towlower);
                 if (low.find(L"\\windows\\boot\\") != std::wstring::npos || low.find(L"\\efi\\microsoft\\boot\\") != std::wstring::npos) {
@@ -1161,6 +1178,12 @@ bool CbsManager::installExtractedFiles(const std::string& extractedDir, const st
         for (auto& th : sth) th.join();
 
         appendToErrorLog("Special processing summary: ok=" + std::to_string(sOk.load()) + ", failed=" + std::to_string(sFail.load()));
+    }
+
+    // Mark reboot if any delayed replacements were scheduled
+    if (anyDelayedReplace) {
+        rebootRequired = true;
+        appendToErrorLog("One or more files are scheduled to be replaced at next reboot.");
     }
 
     // Optionally update boot files with bcdboot for offline images if we changed boot content
@@ -1500,7 +1523,9 @@ CbsInstallResult CbsManager::installExtractedPackageWithCbs(const std::string& e
             r.errorDescription = "installExtractedFiles failed";
             r.errorCode = E_FAIL; return r;
         }
-        r.success = true; return r;
+        r.success = true;
+        r.needsRestart = rebootRequired;
+        return r;
     } catch (const std::exception& ex) {
         r.errorDescription = ex.what(); r.errorCode = E_UNEXPECTED; return r;
     }
