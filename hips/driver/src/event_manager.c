@@ -145,6 +145,9 @@ NTSTATUS HipsGetEvents(
 VOID HipsCleanupEventList(void)
 {
     KIRQL oldIrql;
+    PLIST_ENTRY listEntry;
+    PHIPS_EVENT event;
+    ULONG cleanedCount = 0;
 
     if (!g_DriverContext) {
         return;
@@ -153,6 +156,23 @@ VOID HipsCleanupEventList(void)
     KeAcquireSpinLock(&g_DriverContext->Lock, &oldIrql);
 
     while (!IsListEmpty(&g_DriverContext->EventList)) {
+        listEntry = RemoveHeadList(&g_DriverContext->EventList);
+        event = CONTAINING_RECORD(listEntry, HIPS_EVENT, ListEntry);
+        
+        // Safely free memory
+        if (event) {
+            HipsFreeMemory(event);
+            cleanedCount++;
+        }
+    }
+
+    // Reset event count
+    g_DriverContext->EventCount = 0;
+
+    KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
+
+    HipsDbgPrint("Cleaned up %lu events from queue\n", cleanedCount);
+}
         PLIST_ENTRY listEntry = RemoveHeadList(&g_DriverContext->EventList);
         PHIPS_EVENT event = CONTAINING_RECORD(listEntry, HIPS_EVENT, ListEntry);
         HipsFreeMemory(event);
