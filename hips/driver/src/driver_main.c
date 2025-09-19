@@ -151,39 +151,50 @@ NTSTATUS DriverEntry(
         return status;
     }
 
-    // Initialize driver context
-    g_DriverContext = (PHIPS_DRIVER_CONTEXT)ExAllocatePoolWithTag(
-        NonPagedPool,
-        sizeof(HIPS_DRIVER_CONTEXT),
-        HIPS_DRIVER_TAG
-    );
+    // Initialize driver context with exception handling
+    __try {
+        g_DriverContext = (PHIPS_DRIVER_CONTEXT)ExAllocatePoolWithTag(
+            NonPagedPool,
+            sizeof(HIPS_DRIVER_CONTEXT),
+            HIPS_DRIVER_TAG
+        );
 
-    if (g_DriverContext == NULL) {
-        DbgPrint("[HIPS] Failed to allocate driver context\n");
-        HipsDeleteDevice();
-        return STATUS_INSUFFICIENT_RESOURCES;
+        if (g_DriverContext == NULL) {
+            DbgPrint("[HIPS] Failed to allocate driver context\n");
+            HipsDeleteDevice();
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlZeroMemory(g_DriverContext, sizeof(HIPS_DRIVER_CONTEXT));
+        
+        // Initialize context
+        g_DriverContext->DriverObject = DriverObject;
+        g_DriverContext->DeviceObject = g_DeviceObject;
+        g_DriverContext->MonitoringEnabled = FALSE;
+        KeInitializeSpinLock(&g_DriverContext->Lock);
+        InitializeListHead(&g_DriverContext->EventList);
+        InitializeListHead(&g_DriverContext->RuleList);
+        
+        // Initialize configuration with defaults
+        RtlZeroMemory(&g_DriverContext->Configuration, sizeof(HIPS_CONFIG));
+        g_DriverContext->Configuration.MonitorFileSystem = TRUE;
+        g_DriverContext->Configuration.MonitorProcesses = TRUE;
+        g_DriverContext->Configuration.MonitorRegistry = TRUE;
+        g_DriverContext->Configuration.MonitorNetwork = FALSE; // Will be implemented later
+        g_DriverContext->Configuration.MonitorMemory = FALSE;  // Will be implemented later
+        g_DriverContext->Configuration.MinimumThreatLevel = HIPS_THREAT_LOW;
+        g_DriverContext->Configuration.MaxEventQueueSize = 1000;
+        g_DriverContext->Configuration.EventTimeoutMs = 5000;
     }
-
-    RtlZeroMemory(g_DriverContext, sizeof(HIPS_DRIVER_CONTEXT));
-    
-    // Initialize context
-    g_DriverContext->DriverObject = DriverObject;
-    g_DriverContext->DeviceObject = g_DeviceObject;
-    g_DriverContext->MonitoringEnabled = FALSE;
-    KeInitializeSpinLock(&g_DriverContext->Lock);
-    InitializeListHead(&g_DriverContext->EventList);
-    InitializeListHead(&g_DriverContext->RuleList);
-    
-    // Initialize configuration with defaults
-    RtlZeroMemory(&g_DriverContext->Configuration, sizeof(HIPS_CONFIG));
-    g_DriverContext->Configuration.MonitorFileSystem = TRUE;
-    g_DriverContext->Configuration.MonitorProcesses = TRUE;
-    g_DriverContext->Configuration.MonitorRegistry = TRUE;
-    g_DriverContext->Configuration.MonitorNetwork = FALSE; // Will be implemented later
-    g_DriverContext->Configuration.MonitorMemory = FALSE;  // Will be implemented later
-    g_DriverContext->Configuration.MinimumThreatLevel = HIPS_THREAT_LOW;
-    g_DriverContext->Configuration.MaxEventQueueSize = 1000;
-    g_DriverContext->Configuration.EventTimeoutMs = 5000;
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrint("[HIPS] Exception during driver context initialization: 0x%08X\n", GetExceptionCode());
+        if (g_DriverContext) {
+            ExFreePoolWithTag(g_DriverContext, HIPS_DRIVER_TAG);
+            g_DriverContext = NULL;
+        }
+        HipsDeleteDevice();
+        return STATUS_UNSUCCESSFUL;
+    }
 
     // Register filter
     status = FltRegisterFilter(DriverObject, &FilterRegistration, &g_FilterHandle);
@@ -237,29 +248,43 @@ VOID HipsDriverUnload(
 
     DbgPrint("[HIPS] Driver unloading...\n");
 
-    // Unregister callbacks
-    HipsUnregisterProcessCallbacks();
-    HipsUnregisterRegistryCallbacks();
-    
-    // Clean up rules
-    HipsCleanupRules();
+    __try {
+        // Unregister callbacks
+        HipsUnregisterProcessCallbacks();
+        HipsUnregisterRegistryCallbacks();
+        
+        // Clean up rules
+        HipsCleanupRules();
 
-    // Stop filtering and unregister filter
-    if (g_FilterHandle != NULL) {
-        FltUnregisterFilter(g_FilterHandle);
-        g_FilterHandle = NULL;
+        // Stop filtering and unregister filter
+        if (g_FilterHandle != NULL) {
+            FltUnregisterFilter(g_FilterHandle);
+            g_FilterHandle = NULL;
+        }
+
+        // Clean up event list
+        HipsCleanupEventList();
+
+        // Clean up driver context
+        if (g_DriverContext != NULL) {
+            ExFreePoolWithTag(g_DriverContext, HIPS_DRIVER_TAG);
+            g_DriverContext = NULL;
+        }
+
+        // Delete device
+        HipsDeleteDevice();
+
+        DbgPrint("[HIPS] Driver unloaded successfully\n");
     }
-
-    // Clean up driver context
-    if (g_DriverContext != NULL) {
-        ExFreePoolWithTag(g_DriverContext, HIPS_DRIVER_TAG);
-        g_DriverContext = NULL;
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrint("[HIPS] Exception during driver unload: 0x%08X\n", GetExceptionCode());
+        // Continue with cleanup even if there was an exception
+        if (g_DriverContext != NULL) {
+            ExFreePoolWithTag(g_DriverContext, HIPS_DRIVER_TAG);
+            g_DriverContext = NULL;
+        }
+        HipsDeleteDevice();
     }
-
-    // Delete device
-    HipsDeleteDevice();
-
-    DbgPrint("[HIPS] Driver unloaded\n");
 }
 
 /**
@@ -587,16 +612,26 @@ NTSTATUS HipsSetConfiguration(
             return STATUS_INVALID_PARAMETER;
         }
 
-        // Update configuration atomically
+        // Safely update configuration
         KeAcquireSpinLock(&g_DriverContext->Lock, &oldIrql);
+        
         RtlCopyMemory(&g_DriverContext->Configuration, newConfig, sizeof(HIPS_CONFIG));
+        
         KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
-
+        
         HipsDbgPrint("Configuration updated successfully\n");
+        
         return STATUS_SUCCESS;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        HipsDbgPrint("Exception in set configuration: 0x%08X\n", GetExceptionCode());
-        return STATUS_INVALID_PARAMETER;
+        // If we acquired the spinlock, release it
+        if (KeGetCurrentIrql() >= DISPATCH_LEVEL) {
+            KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
+        }
+        
+        NTSTATUS status = GetExceptionCode();
+        HipsDbgPrint("Exception in HipsSetConfiguration: 0x%08X\n", status);
+        return status;
     }
 }
+=======
