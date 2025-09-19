@@ -64,6 +64,16 @@ hips.exe
 - Heap spraying detection
 - ROP chain prevention
 
+### 7. Self-Protection Engine (src/self_protection.cpp)
+- Process self-protection (prevent termination, injection, debugging)
+- File system self-protection (protect HIPS binaries and configurations)
+- Registry self-protection (protect HIPS registry keys and services)
+- Memory self-protection (prevent code injection and manipulation)
+- Service protection (prevent unauthorized service stopping)
+- Anti-tampering mechanisms with integrity verification
+- Configurable response actions (block, alert, terminate attacker)
+- Trusted process whitelist management
+
 ## Configuration
 
 The system is configured through `hips/config/hips_config.json`:
@@ -74,6 +84,16 @@ The system is configured through `hips/config/hips_config.json`:
 - **Threat Thresholds**: Set sensitivity levels
 - **Response Actions**: Configure automatic responses
 - **Performance Limits**: Manage system resource usage
+- **Self-Protection Settings**: Configure self-defense mechanisms
+
+### Self-Protection Configuration:
+- **Process Protection**: Prevent termination, injection, and debugging attempts
+- **File Protection**: Protect HIPS binaries, configurations, and logs
+- **Registry Protection**: Secure HIPS registry keys and service entries
+- **Memory Protection**: Prevent code injection and memory manipulation
+- **Service Protection**: Block unauthorized service control operations
+- **Response Settings**: Configure actions (block, alert, terminate, quarantine)
+- **Trusted Processes**: Whitelist legitimate system processes
 
 ### Security Rules:
 - Pattern-based event matching

@@ -30,7 +30,25 @@ public:
             return false;
         }
         
+        // Enable self-protection
+        std::cout << "Enabling self-protection..." << std::endl;
+        if (!hips_engine_->EnableSelfProtection(true)) {
+            std::cerr << "Warning: Failed to enable self-protection" << std::endl;
+        } else {
+            std::cout << "Self-protection enabled successfully" << std::endl;
+        }
+        
+        // Perform initial integrity check
+        std::cout << "Performing self-integrity check..." << std::endl;
+        bool integrity_ok = hips_engine_->CheckSelfIntegrity();
+        if (integrity_ok) {
+            std::cout << "Self-integrity check: PASSED" << std::endl;
+        } else {
+            std::cout << "Self-integrity check: FAILED - Potential tampering detected!" << std::endl;
+        }
+        
         std::cout << "HIPS monitoring started successfully" << std::endl;
+        std::cout << "Self-protection status: " << (hips_engine_->IsSelfProtectionEnabled() ? "ENABLED" : "DISABLED") << std::endl;
         return true;
     }
     
@@ -80,7 +98,13 @@ private:
         std::cout << "Network Events: " << hips_engine_->GetEventCount(EventType::NETWORK_CONNECTION) << std::endl;
         std::cout << "Memory Events: " << hips_engine_->GetEventCount(EventType::MEMORY_INJECTION) << std::endl;
         std::cout << "Registry Events: " << hips_engine_->GetEventCount(EventType::REGISTRY_MODIFICATION) << std::endl;
-        std::cout << "----------------------\n" << std::endl;
+        
+        // Self-protection statistics
+        std::cout << "--- Self-Protection Statistics ---" << std::endl;
+        std::cout << "Self-Protection Status: " << (hips_engine_->IsSelfProtectionEnabled() ? "ENABLED" : "DISABLED") << std::endl;
+        std::cout << "Protection Events: " << hips_engine_->GetSelfProtectionEventCount() << std::endl;
+        std::cout << "Blocked Attacks: " << hips_engine_->GetBlockedAttacksCount() << std::endl;
+        std::cout << "------------------------------------\n" << std::endl;
     }
 };
 

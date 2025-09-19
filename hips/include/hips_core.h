@@ -63,6 +63,7 @@ class MemoryProtector;
 class ConfigManager;
 class LogManager;
 class AlertManager;
+class SelfProtectionEngine;
 
 #ifdef HIPS_KERNEL_DRIVER_SUPPORT
 class DriverInterface;
@@ -161,6 +162,13 @@ public:
     bool EnableLearningMode(bool enable);
     bool ExportThreatReport(const std::string& output_path);
     bool UpdateThreatSignatures(const std::string& signature_path);
+    
+    // Self-protection features
+    bool EnableSelfProtection(bool enable);
+    bool IsSelfProtectionEnabled() const;
+    bool CheckSelfIntegrity();
+    uint64_t GetSelfProtectionEventCount() const;
+    uint64_t GetBlockedAttacksCount() const;
 
 private:
     // Component instances
@@ -172,6 +180,7 @@ private:
     std::unique_ptr<ConfigManager> config_manager_;
     std::unique_ptr<LogManager> log_manager_;
     std::unique_ptr<AlertManager> alert_manager_;
+    std::unique_ptr<SelfProtectionEngine> self_protection_;
     
 #ifdef HIPS_KERNEL_DRIVER_SUPPORT
     // Kernel driver interface for enhanced monitoring
