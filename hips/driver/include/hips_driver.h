@@ -271,15 +271,48 @@ VOID HipsLogEvent(
 #define HipsDbgPrint(format, ...)
 #endif
 
-// Memory allocation macros
+// Enhanced memory allocation macros with additional safety checks
+#define HIPS_MAX_ALLOCATION_SIZE (64 * 1024 * 1024)  // 64MB max single allocation
+
 #define HipsAllocateNonPagedMemory(Size) \
-    ExAllocatePoolWithTag(NonPagedPool, (Size), HIPS_DRIVER_TAG)
+    ((Size) > 0 && (Size) <= HIPS_MAX_ALLOCATION_SIZE ? \
+     ExAllocatePoolWithTag(NonPagedPool, (Size), HIPS_DRIVER_TAG) : NULL)
 
 #define HipsAllocatePagedMemory(Size) \
-    ExAllocatePoolWithTag(PagedPool, (Size), HIPS_DRIVER_TAG)
+    ((Size) > 0 && (Size) <= HIPS_MAX_ALLOCATION_SIZE ? \
+     ExAllocatePoolWithTag(PagedPool, (Size), HIPS_DRIVER_TAG) : NULL)
 
 #define HipsFreeMemory(Ptr) \
-    if (Ptr) { ExFreePoolWithTag((Ptr), HIPS_DRIVER_TAG); (Ptr) = NULL; }
+    do { \
+        if (Ptr) { \
+            __try { \
+                ExFreePoolWithTag((Ptr), HIPS_DRIVER_TAG); \
+            } \
+            __except(EXCEPTION_EXECUTE_HANDLER) { \
+                HipsDbgPrint("Exception freeing memory at %p\n", (Ptr)); \
+            } \
+            (Ptr) = NULL; \
+        } \
+    } while(0)
+
+// Safe memory allocation with zeroing
+#define HipsAllocateNonPagedMemoryZero(Size) \
+    HipsAllocateAndZeroMemory(NonPagedPool, (Size))
+
+#define HipsAllocatePagedMemoryZero(Size) \
+    HipsAllocateAndZeroMemory(PagedPool, (Size))
+
+// Function prototypes for safe memory operations
+PVOID HipsAllocateAndZeroMemory(
+    _In_ POOL_TYPE PoolType,
+    _In_ SIZE_T Size
+);
+
+BOOLEAN HipsValidateUserBuffer(
+    _In_ PVOID Buffer,
+    _In_ SIZE_T Size,
+    _In_ BOOLEAN ForWrite
+);
 
 // String utilities for kernel mode
 NTSTATUS HipsAllocateUnicodeString(

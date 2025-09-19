@@ -296,3 +296,61 @@ VOID HipsLogEvent(
     
     va_end(args);
 }
+
+/**
+ * Safe memory allocation with zeroing
+ */
+PVOID HipsAllocateAndZeroMemory(
+    _In_ POOL_TYPE PoolType,
+    _In_ SIZE_T Size
+)
+{
+    PVOID memory;
+
+    // Validate size
+    if (Size == 0 || Size > HIPS_MAX_ALLOCATION_SIZE) {
+        HipsDbgPrint("Invalid allocation size: %zu\n", Size);
+        return NULL;
+    }
+
+    __try {
+        memory = ExAllocatePoolWithTag(PoolType, Size, HIPS_DRIVER_TAG);
+        if (memory) {
+            RtlZeroMemory(memory, Size);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        HipsDbgPrint("Exception allocating memory: 0x%08X\n", GetExceptionCode());
+        memory = NULL;
+    }
+
+    return memory;
+}
+
+/**
+ * Validate user buffer for safe access
+ */
+BOOLEAN HipsValidateUserBuffer(
+    _In_ PVOID Buffer,
+    _In_ SIZE_T Size,
+    _In_ BOOLEAN ForWrite
+)
+{
+    if (!Buffer || Size == 0) {
+        return FALSE;
+    }
+
+    __try {
+        if (ForWrite) {
+            ProbeForWrite(Buffer, Size, sizeof(UCHAR));
+        } else {
+            ProbeForRead(Buffer, Size, sizeof(UCHAR));
+        }
+        return TRUE;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        HipsDbgPrint("Buffer validation failed: Buffer=%p, Size=%zu, Write=%d\n", 
+                     Buffer, Size, ForWrite);
+        return FALSE;
+    }
+}

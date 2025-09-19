@@ -33,14 +33,14 @@ NTSTATUS HipsAddEvent(
         return STATUS_INVALID_PARAMETER;
     }
 
-    // Allocate event structure
-    event = (PHIPS_EVENT)HipsAllocateNonPagedMemory(sizeof(HIPS_EVENT));
+    // Allocate event structure with enhanced safety
+    event = (PHIPS_EVENT)HipsAllocateNonPagedMemoryZero(sizeof(HIPS_EVENT));
     if (!event) {
+        HipsDbgPrint("Failed to allocate event structure\n");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    // Initialize event
-    RtlZeroMemory(event, sizeof(HIPS_EVENT));
+    // Initialize event (memory is already zeroed)
     event->EventType = EventType;
     event->ThreatLevel = ThreatLevel;
     event->ProcessId = ProcessId;

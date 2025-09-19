@@ -56,26 +56,46 @@ BOOL CHipsMainDialog::OnInitDialog()
 	SetIcon(m_hIcon, TRUE);			// Set big icon
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
-	// Initialize event list
-	m_eventList.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-	m_eventList.InsertColumn(0, _T("Time"), LVCFMT_LEFT, 120);
-	m_eventList.InsertColumn(1, _T("Event Type"), LVCFMT_LEFT, 120);
-	m_eventList.InsertColumn(2, _T("Threat Level"), LVCFMT_LEFT, 100);
-	m_eventList.InsertColumn(3, _T("Process"), LVCFMT_LEFT, 150);
-	m_eventList.InsertColumn(4, _T("Target"), LVCFMT_LEFT, 200);
-
-	// Set window title
-	SetWindowText(_T("HIPS - Host Intrusion Prevention System v1.2.0"));
-
-	// Initialize driver interface
-	LogMessage(_T("HIPS GUI started. Ready to connect to driver."));
+	// Enable modern visual styles for controls
+	EnableVisualManagerStyle(TRUE);
 	
-	// Set up timer for status updates
-	m_updateTimer = SetTimer(1, 2000, NULL); // Update every 2 seconds
+	// Initialize event list with enhanced styling
+	m_eventList.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | 
+								LVS_EX_DOUBLEBUFFER | LVS_EX_SUBITEMIMAGES);
+	
+	// Setup list view columns with better sizing
+	m_eventList.InsertColumn(0, _T("Time"), LVCFMT_LEFT, 140);
+	m_eventList.InsertColumn(1, _T("Event Type"), LVCFMT_LEFT, 130);
+	m_eventList.InsertColumn(2, _T("Threat Level"), LVCFMT_CENTER, 100);
+	m_eventList.InsertColumn(3, _T("Process"), LVCFMT_LEFT, 180);
+	m_eventList.InsertColumn(4, _T("Target"), LVCFMT_LEFT, 220);
+
+	// Create image list for threat level indicators
+	m_threatImageList.Create(16, 16, ILC_COLOR32 | ILC_MASK, 5, 1);
+	
+	// Create colored icons for threat levels (we'll create simple colored rectangles)
+	CreateThreatLevelIcons();
+	m_eventList.SetImageList(&m_threatImageList, LVSIL_SMALL);
+
+	// Set window title with enhanced version info
+	SetWindowText(_T("HIPS - Host Intrusion Prevention System v1.2.0 (Enhanced Edition)"));
+
+	// Apply modern window styling
+	SetWindowTheme(GetSafeHwnd(), L"Explorer", NULL);
+	
+	// Initialize driver interface
+	LogMessage(_T("HIPS GUI started. Enhanced interface ready."));
+	LogMessage(_T("Ready to connect to kernel driver."));
+	
+	// Set up timer for status updates with faster refresh for better responsiveness
+	m_updateTimer = SetTimer(1, 1500, NULL); // Update every 1.5 seconds
 	
 	// Initial status update
 	UpdateStatus();
 	UpdateControls();
+
+	// Apply enhanced styling to controls
+	ApplyEnhancedStyling();
 
 	return TRUE;
 }
@@ -319,8 +339,9 @@ void CHipsMainDialog::RefreshEventList()
 			// Convert timestamp to readable format
 			timeStr.Format(_T("%I64d"), event.timestamp);
 			
-			// Insert item
-			int index = m_eventList.InsertItem(i, timeStr);
+			// Insert item with threat level icon
+			int iconIndex = GetThreatLevelIcon((DWORD)event.threat_level);
+			int index = m_eventList.InsertItem(i, timeStr, iconIndex);
 			
 			// Set event type
 			CString eventType;
@@ -375,4 +396,86 @@ void CHipsMainDialog::RefreshEventList()
 			m_eventList.SetItemText(index, 4, targetPath);
 		}
 	}
+}
+
+/**
+ * Create colored icons for different threat levels
+ */
+void CHipsMainDialog::CreateThreatLevelIcons()
+{
+	// Create colored bitmaps for threat levels
+	CDC dc;
+	dc.CreateCompatibleDC(NULL);
+	
+	for (int i = 0; i <= 4; i++) // Threat levels 0-4
+	{
+		CBitmap bitmap;
+		bitmap.CreateBitmap(16, 16, 1, 32, NULL);
+		
+		CDC memDC;
+		memDC.CreateCompatibleDC(&dc);
+		CBitmap* pOldBitmap = memDC.SelectObject(&bitmap);
+		
+		// Fill with threat level color
+		COLORREF color = GetThreatLevelColor(i);
+		CBrush brush(color);
+		CRect rect(0, 0, 16, 16);
+		memDC.FillRect(&rect, &brush);
+		
+		// Add border
+		CPen pen(PS_SOLID, 1, RGB(0, 0, 0));
+		CPen* pOldPen = memDC.SelectObject(&pen);
+		memDC.Rectangle(&rect);
+		
+		memDC.SelectObject(pOldPen);
+		memDC.SelectObject(pOldBitmap);
+		
+		// Add to image list
+		m_threatImageList.Add(&bitmap, color);
+	}
+}
+
+/**
+ * Apply enhanced styling to controls
+ */
+void CHipsMainDialog::ApplyEnhancedStyling()
+{
+	// Set modern font for better readability
+	CFont font;
+	font.CreateFont(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, 0, 
+					ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+					CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, _T("Segoe UI"));
+	
+	// Apply font to controls
+	m_statusText.SetFont(&font);
+	m_driverStatusText.SetFont(&font);
+	m_eventList.SetFont(&font);
+	
+	// Set colors for status indicators
+	// Note: In a full implementation, you'd create custom controls for better styling
+}
+
+/**
+ * Get color for threat level
+ */
+COLORREF CHipsMainDialog::GetThreatLevelColor(DWORD threatLevel)
+{
+	switch (threatLevel)
+	{
+		case 0: return RGB(128, 128, 128); // Gray - None/Info
+		case 1: return RGB(0, 255, 0);     // Green - Low
+		case 2: return RGB(255, 255, 0);   // Yellow - Medium  
+		case 3: return RGB(255, 165, 0);   // Orange - High
+		case 4: return RGB(255, 0, 0);     // Red - Critical
+		default: return RGB(128, 128, 128); // Default gray
+	}
+}
+
+/**
+ * Get icon index for threat level
+ */
+int CHipsMainDialog::GetThreatLevelIcon(DWORD threatLevel)
+{
+	return min((int)threatLevel, 4); // Clamp to available icons (0-4)
+}
 }

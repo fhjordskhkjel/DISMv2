@@ -403,42 +403,95 @@ NTSTATUS HipsDispatchDeviceControl(
     }
 
     __try {
+        // Additional validation at elevated IRQL
+        KIRQL oldIrql;
+        KeAcquireSpinLock(&g_DriverContext->Lock, &oldIrql);
+        BOOLEAN contextValid = (g_DriverContext != NULL && 
+                               g_DriverContext->DriverObject != NULL);
+        KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
+        
+        if (!contextValid) {
+            status = STATUS_DEVICE_NOT_READY;
+            goto cleanup;
+        }
+
         switch (irpStack->Parameters.DeviceIoControl.IoControlCode) {
             case IOCTL_HIPS_GET_VERSION:
-                // Get driver version
+                // Enhanced buffer validation for driver version
                 if (outputBufferLength >= sizeof(ULONG) && outputBuffer) {
-                    *(PULONG)outputBuffer = HIPS_DRIVER_VERSION;
-                    bytesReturned = sizeof(ULONG);
+                    // Validate output buffer is writable
+                    __try {
+                        ProbeForWrite(outputBuffer, sizeof(ULONG), sizeof(UCHAR));
+                        *(PULONG)outputBuffer = HIPS_DRIVER_VERSION;
+                        bytesReturned = sizeof(ULONG);
+                    }
+                    __except(EXCEPTION_EXECUTE_HANDLER) {
+                        status = STATUS_INVALID_USER_BUFFER;
+                        HipsDbgPrint("Invalid output buffer for GET_VERSION\n");
+                    }
                 } else {
                     status = STATUS_BUFFER_TOO_SMALL;
                 }
                 break;
 
             case IOCTL_HIPS_START_MONITORING:
-                // Start monitoring
-                g_DriverContext->MonitoringEnabled = TRUE;
-                HipsDbgPrint("Monitoring started\n");
+                // Start monitoring with enhanced validation
+                KeAcquireSpinLock(&g_DriverContext->Lock, &oldIrql);
+                if (!g_DriverContext->MonitoringEnabled) {
+                    g_DriverContext->MonitoringEnabled = TRUE;
+                    HipsDbgPrint("Monitoring started\n");
+                } else {
+                    HipsDbgPrint("Monitoring already active\n");
+                }
+                KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
                 break;
 
             case IOCTL_HIPS_STOP_MONITORING:
-                // Stop monitoring
-                g_DriverContext->MonitoringEnabled = FALSE;
-                HipsDbgPrint("Monitoring stopped\n");
+                // Stop monitoring with enhanced validation
+                KeAcquireSpinLock(&g_DriverContext->Lock, &oldIrql);
+                if (g_DriverContext->MonitoringEnabled) {
+                    g_DriverContext->MonitoringEnabled = FALSE;
+                    HipsDbgPrint("Monitoring stopped\n");
+                } else {
+                    HipsDbgPrint("Monitoring already inactive\n");
+                }
+                KeReleaseSpinLock(&g_DriverContext->Lock, oldIrql);
                 break;
 
             case IOCTL_HIPS_GET_EVENTS:
-                // Get events from queue
+                // Enhanced validation for event retrieval
                 if (outputBuffer && outputBufferLength > 0) {
-                    status = HipsGetEvents(outputBuffer, outputBufferLength, &bytesReturned);
+                    // Validate minimum buffer size
+                    if (outputBufferLength < sizeof(ULONG)) {
+                        status = STATUS_BUFFER_TOO_SMALL;
+                        break;
+                    }
+                    
+                    __try {
+                        ProbeForWrite(outputBuffer, outputBufferLength, sizeof(UCHAR));
+                        status = HipsGetEvents(outputBuffer, outputBufferLength, &bytesReturned);
+                    }
+                    __except(EXCEPTION_EXECUTE_HANDLER) {
+                        status = STATUS_INVALID_USER_BUFFER;
+                        bytesReturned = 0;
+                        HipsDbgPrint("Invalid output buffer for GET_EVENTS\n");
+                    }
                 } else {
                     status = STATUS_INVALID_PARAMETER;
                 }
                 break;
 
             case IOCTL_HIPS_SET_CONFIG:
-                // Set configuration
+                // Enhanced validation for configuration
                 if (inputBuffer && inputBufferLength >= sizeof(HIPS_CONFIG)) {
-                    status = HipsSetConfiguration(inputBuffer, inputBufferLength);
+                    __try {
+                        ProbeForRead(inputBuffer, sizeof(HIPS_CONFIG), sizeof(UCHAR));
+                        status = HipsSetConfiguration(inputBuffer, inputBufferLength);
+                    }
+                    __except(EXCEPTION_EXECUTE_HANDLER) {
+                        status = STATUS_INVALID_USER_BUFFER;
+                        HipsDbgPrint("Invalid input buffer for SET_CONFIG\n");
+                    }
                 } else {
                     status = STATUS_INVALID_PARAMETER;
                 }
@@ -446,6 +499,8 @@ NTSTATUS HipsDispatchDeviceControl(
 
             default:
                 status = STATUS_INVALID_DEVICE_REQUEST;
+                HipsDbgPrint("Unknown IOCTL: 0x%08X\n", 
+                    irpStack->Parameters.DeviceIoControl.IoControlCode);
                 break;
         }
     }
