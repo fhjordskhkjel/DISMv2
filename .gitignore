@@ -31,6 +31,14 @@ Makefile
 *.suo
 *.user
 
+# .NET specific
+bin/
+obj/
+*.csproj.user
+*.suo
+*.cache
+*.pdb
+
 # OS files
 .DS_Store
 Thumbs.db
