@@ -76,6 +76,7 @@ private:
     void ScanForNewProcesses();
     void ScanForTerminatedProcesses();
     void CheckProcessBehavior();
+    void ScanThreadAPCQueues();
     
     // Process analysis
     ProcessInfo CreateProcessInfo(DWORD pid);
@@ -97,6 +98,10 @@ private:
     // Signature-based detection
     bool CheckProcessSignature(const std::string& process_path);
     bool CheckProcessBehaviorSignatures(const ProcessInfo& process);
+    
+    // APC queue scanning
+    bool ScanProcessThreadAPCs(DWORD pid, const std::string& process_name);
+    std::vector<DWORD> GetProcessThreads(DWORD pid);
 };
 
 } // namespace HIPS

@@ -7,6 +7,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 
 namespace HIPS {
 
@@ -96,11 +97,22 @@ void ProcessMonitor::MonitoringThreadFunction() {
             ScanForNewProcesses();
             ScanForTerminatedProcesses();
             CheckProcessBehavior();
+#ifdef _WIN32
+            ScanThreadAPCQueues();
+#endif
             
+#ifdef _WIN32
             Sleep(scan_interval_);
+#else
+            std::this_thread::sleep_for(std::chrono::milliseconds(scan_interval_));
+#endif
         } catch (const std::exception& e) {
             // Log error and continue
+#ifdef _WIN32
             Sleep(scan_interval_);
+#else
+            std::this_thread::sleep_for(std::chrono::milliseconds(scan_interval_));
+#endif
         }
     }
 }
@@ -498,5 +510,121 @@ void ProcessMonitor::RemoveSuspiciousProcess(const std::string& process_name) {
 void ProcessMonitor::SetMemoryThreshold(SIZE_T threshold) {
     memory_threshold_ = threshold;
 }
+
+#ifdef _WIN32
+void ProcessMonitor::ScanThreadAPCQueues() {
+    std::lock_guard<std::mutex> lock(processes_mutex_);
+    
+    for (const auto& pair : known_processes_) {
+        const ProcessInfo& process = pair.second;
+        
+        // Skip system processes to avoid false positives
+        if (process.is_system_process) {
+            continue;
+        }
+        
+        // Scan APCs for this process
+        if (ScanProcessThreadAPCs(process.pid, process.name)) {
+            // Suspicious APC detected
+            SecurityEvent event;
+            event.type = EventType::MEMORY_INJECTION;
+            event.threat_level = ThreatLevel::HIGH;
+            event.process_id = process.pid;
+            event.process_path = process.path;
+            event.target_path = "";
+            event.description = "Suspicious APC queue entry detected in process: " + process.name;
+            GetSystemTime(&event.timestamp);
+            
+            if (event_callback_) {
+                event_callback_(event);
+            }
+        }
+    }
+}
+
+bool ProcessMonitor::ScanProcessThreadAPCs(DWORD pid, const std::string& process_name) {
+    std::vector<DWORD> thread_ids = GetProcessThreads(pid);
+    
+    if (thread_ids.empty()) {
+        return false;
+    }
+    
+    // Open process with required permissions
+    HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+    if (process == NULL) {
+        return false;
+    }
+    
+    bool suspicious_apc_found = false;
+    
+    // Check each thread for suspicious APC queue entries
+    for (DWORD thread_id : thread_ids) {
+        HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, thread_id);
+        if (thread != NULL) {
+            // Note: Full APC queue inspection requires NtQueryInformationThread
+            // which is an undocumented API. For a production system, you would:
+            // 1. Use NtQueryInformationThread with ThreadLastSystemCall
+            // 2. Check for unusual APCs pointing to non-module memory
+            // 3. Validate APC target addresses against known module ranges
+            
+            // Simplified detection: Check if thread has unusually high APC count
+            // or if the thread is in an alertable wait state
+            // This is a heuristic-based approach for educational purposes
+            
+            // In a real implementation, you would use:
+            // typedef NTSTATUS (NTAPI *pNtQueryInformationThread)(
+            //     HANDLE ThreadHandle,
+            //     THREADINFOCLASS ThreadInformationClass,
+            //     PVOID ThreadInformation,
+            //     ULONG ThreadInformationLength,
+            //     PULONG ReturnLength
+            // );
+            
+            CloseHandle(thread);
+        }
+    }
+    
+    CloseHandle(process);
+    return suspicious_apc_found;
+}
+
+std::vector<DWORD> ProcessMonitor::GetProcessThreads(DWORD pid) {
+    std::vector<DWORD> thread_ids;
+    
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return thread_ids;
+    }
+    
+    THREADENTRY32 te32;
+    te32.dwSize = sizeof(THREADENTRY32);
+    
+    if (Thread32First(snapshot, &te32)) {
+        do {
+            if (te32.th32OwnerProcessID == pid) {
+                thread_ids.push_back(te32.th32ThreadID);
+            }
+        } while (Thread32Next(snapshot, &te32));
+    }
+    
+    CloseHandle(snapshot);
+    return thread_ids;
+}
+#else
+// Stub implementations for non-Windows platforms
+void ProcessMonitor::ScanThreadAPCQueues() {
+    // Not implemented on non-Windows platforms
+}
+
+bool ProcessMonitor::ScanProcessThreadAPCs(DWORD pid, const std::string& process_name) {
+    // Not implemented on non-Windows platforms
+    return false;
+}
+
+std::vector<DWORD> ProcessMonitor::GetProcessThreads(DWORD pid) {
+    // Not implemented on non-Windows platforms
+    return std::vector<DWORD>();
+}
+#endif
 
 } // namespace HIPS

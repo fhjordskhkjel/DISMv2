@@ -193,6 +193,21 @@ TEST_F(ProcessMonitorTest, CallbackFunctionality) {
     // Whether it's called depends on system process activity
 }
 
+TEST_F(ProcessMonitorTest, APCQueueScanning) {
+    EXPECT_TRUE(monitor->Initialize());
+    EXPECT_TRUE(monitor->Start());
+    
+    // Let the monitor run and perform APC queue scanning
+    // This will scan all non-system processes for suspicious APC entries
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    
+    // The APC scanning should complete without crashing
+    // Actual detection depends on running processes and their APC queues
+    EXPECT_TRUE(monitor->IsRunning());
+    
+    EXPECT_TRUE(monitor->Stop());
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
