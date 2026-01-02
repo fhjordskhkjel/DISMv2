@@ -3,7 +3,7 @@
  * This file can be compiled independently to show correlation engine features
  */
 
-#include "../include/correlation_engine.h"
+#include "correlation_engine.h"
 #include <iostream>
 #include <iomanip>
 
