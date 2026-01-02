@@ -129,8 +129,9 @@ void CorrelationEngine::ProcessEvent(const SecurityEvent& event) {
     // environments, consider implementing asynchronous batch processing or
     // periodic detection in a background thread. The current approach ensures
     // immediate correlation detection which is critical for security monitoring.
-    // Performance impact: O(n) per event where n is the number of tracked events,
-    // typically <100 events per process, resulting in minimal overhead (<1ms).
+    // Performance impact: O(n*m) where n is tracked events per type and m is number
+    // of active processes/targets. Typically <100 events * <50 processes = ~5000
+    // operations, resulting in minimal overhead (~1-5ms on modern hardware).
     DetectCorrelations();
 }
 
@@ -461,6 +462,10 @@ void CorrelationEngine::AddCorrelationGroup(const CorrelatedEventGroup& group) {
     std::lock_guard<std::mutex> lock(correlations_mutex_);
     
     // Check if similar correlation already exists
+    // Note: This uses linear search which is O(n) where n is active correlations.
+    // For most use cases with <1000 active correlations, this is acceptable.
+    // For high-volume scenarios, consider using a hash-based index on
+    // (type, process_id) for O(1) duplicate detection.
     bool duplicate = false;
     for (const auto& existing : active_correlations_) {
         if (existing.type == group.type && 
