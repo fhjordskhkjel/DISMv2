@@ -64,6 +64,7 @@ class ConfigManager;
 class LogManager;
 class AlertManager;
 class SelfProtectionEngine;
+class CorrelationEngine;
 
 #ifdef HIPS_KERNEL_DRIVER_SUPPORT
 class DriverInterface;
@@ -181,6 +182,7 @@ private:
     std::unique_ptr<LogManager> log_manager_;
     std::unique_ptr<AlertManager> alert_manager_;
     std::unique_ptr<SelfProtectionEngine> self_protection_;
+    std::unique_ptr<CorrelationEngine> correlation_engine_;
     
 #ifdef HIPS_KERNEL_DRIVER_SUPPORT
     // Kernel driver interface for enhanced monitoring
