@@ -8,6 +8,7 @@
 #include "log_manager.h"
 #include "alert_manager.h"
 #include "self_protection.h"
+#include "correlation_engine.h"
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -150,6 +151,36 @@ bool HIPSEngine::InitializeComponents() {
         ProcessSecurityEvent(sec_event);
     });
     
+    // Initialize correlation engine
+    correlation_engine_ = std::make_unique<CorrelationEngine>();
+    if (!correlation_engine_->Initialize()) {
+        return false;
+    }
+    
+    // Register correlation callback
+    correlation_engine_->RegisterCorrelationCallback([this](const CorrelatedEventGroup& group) {
+        // Create an alert for correlated events
+        if (alert_manager_) {
+            SecurityEvent corr_event;
+            corr_event.type = EventType::EXPLOIT_ATTEMPT;
+            corr_event.threat_level = group.combined_threat_level;
+            corr_event.description = "[CORRELATION] " + group.description;
+            corr_event.process_id = group.events.empty() ? 0 : group.events.front().process_id;
+            corr_event.thread_id = 0;
+            corr_event.timestamp = group.last_event_time;
+            
+            std::ostringstream msg;
+            msg << "Correlation detected: " << group.description 
+                << " (Score: " << group.correlation_score << ")";
+            alert_manager_->SendAlert(corr_event, msg.str());
+        }
+        
+        if (log_manager_) {
+            log_manager_->LogWarning("Correlation detected: " + group.description + 
+                                     " with " + std::to_string(group.events.size()) + " events");
+        }
+    });
+    
     return true;
 }
 
@@ -248,6 +279,11 @@ void HIPSEngine::ShutdownComponents() {
 void HIPSEngine::ProcessSecurityEvent(const SecurityEvent& event) {
     // Update statistics
     UpdateStatistics(event);
+    
+    // Feed event to correlation engine
+    if (correlation_engine_) {
+        correlation_engine_->ProcessEvent(event);
+    }
     
     // Log the event
     if (log_manager_) {

@@ -60,6 +60,7 @@ set(HIPS_SOURCES
     src/alert_manager.cpp
     src/driver_interface.cpp
     src/self_protection.cpp
+    src/correlation_engine.cpp
 )
 
 # Header files
@@ -75,6 +76,7 @@ set(HIPS_HEADERS
     include/alert_manager.h
     include/driver_interface.h
     include/self_protection.h
+    include/correlation_engine.h
 )
 
 # Create HIPS library
