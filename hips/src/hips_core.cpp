@@ -243,12 +243,12 @@ bool HIPSEngine::Stop() {
 }
 
 bool HIPSEngine::Shutdown() {
+    // Stop() is idempotent and acquires state_mutex_ itself, so it must be
+    // called before we take the lock to avoid a deadlock.
+    Stop();
+
     std::lock_guard<std::mutex> lock(state_mutex_);
-    
-    if (running_.load()) {
-        Stop();
-    }
-    
+
     try {
         ShutdownComponents();
         initialized_.store(false);
@@ -317,7 +317,7 @@ ActionType HIPSEngine::EvaluateEvent(const SecurityEvent& event) {
     for (const auto& rule : rules_) {
         if (!rule.enabled) continue;
         
-        if (rule.event_type == event.type || rule.event_type == EventType::FILE_ACCESS) {
+        if (rule.event_type == event.type) {
             // Check threat level threshold
             if (static_cast<int>(event.threat_level) >= static_cast<int>(rule.min_threat_level)) {
                 // Check pattern match
@@ -441,6 +441,51 @@ uint64_t HIPSEngine::GetTotalEventCount() const {
     return total;
 }
 
+bool HIPSEngine::UpdateRule(const std::string& rule_name, const SecurityRule& rule) {
+    std::lock_guard<std::mutex> lock(rules_mutex_);
+    for (auto& r : rules_) {
+        if (r.name == rule_name) {
+            r = rule;
+            return true;
+        }
+    }
+    return false;
+}
+
+void HIPSEngine::RegisterEventHandler(EventType type, std::function<void(const SecurityEvent&)> handler) {
+    std::lock_guard<std::mutex> lock(handlers_mutex_);
+    event_handlers_[type] = std::move(handler);
+}
+
+void HIPSEngine::UnregisterEventHandler(EventType type) {
+    std::lock_guard<std::mutex> lock(handlers_mutex_);
+    event_handlers_.erase(type);
+}
+
+bool HIPSEngine::EnableLearningMode(bool enable) {
+    (void)enable;
+    // Learning mode records observed behavior to auto-generate rules.
+    // Full implementation requires persistent storage; stub returns true.
+    return true;
+}
+
+bool HIPSEngine::ExportThreatReport(const std::string& output_path) {
+    if (output_path.empty()) return false;
+    std::ofstream report(output_path);
+    if (!report.is_open()) return false;
+    report << "HIPS Threat Report\n";
+    report << "Total events: " << GetTotalEventCount() << "\n";
+    return true;
+}
+
+bool HIPSEngine::UpdateThreatSignatures(const std::string& signature_path) {
+    // Load updated threat signatures from file.
+    // Stub: verify file exists and return true.
+    std::ifstream sig(signature_path);
+    return sig.is_open();
+}
+
+
 void HIPSEngine::LoadDefaultRules() {
     // Add some default security rules
     SecurityRule suspicious_process_rule;
@@ -473,7 +518,6 @@ void HIPSEngine::LoadDefaultRules() {
     self_protection_rule.min_threat_level = ThreatLevel::HIGH;
     self_protection_rule.enabled = true;
     AddRule(self_protection_rule);
-}
 }
 
 // Self-protection methods implementation
@@ -584,6 +628,36 @@ std::string ActionTypeToString(ActionType action) {
         case ActionType::CUSTOM: return "CUSTOM";
         default: return "UNKNOWN";
     }
+}
+
+EventType StringToEventType(const std::string& str) {
+    if (str == "FILE_ACCESS") return EventType::FILE_ACCESS;
+    if (str == "FILE_MODIFICATION") return EventType::FILE_MODIFICATION;
+    if (str == "FILE_DELETION") return EventType::FILE_DELETION;
+    if (str == "PROCESS_CREATION") return EventType::PROCESS_CREATION;
+    if (str == "PROCESS_TERMINATION") return EventType::PROCESS_TERMINATION;
+    if (str == "NETWORK_CONNECTION") return EventType::NETWORK_CONNECTION;
+    if (str == "REGISTRY_MODIFICATION") return EventType::REGISTRY_MODIFICATION;
+    if (str == "MEMORY_INJECTION") return EventType::MEMORY_INJECTION;
+    if (str == "EXPLOIT_ATTEMPT") return EventType::EXPLOIT_ATTEMPT;
+    return EventType::FILE_ACCESS; // default fallback
+}
+
+ThreatLevel StringToThreatLevel(const std::string& str) {
+    if (str == "LOW") return ThreatLevel::LOW;
+    if (str == "MEDIUM") return ThreatLevel::MEDIUM;
+    if (str == "HIGH") return ThreatLevel::HIGH;
+    if (str == "CRITICAL") return ThreatLevel::CRITICAL;
+    return ThreatLevel::LOW; // default fallback
+}
+
+ActionType StringToActionType(const std::string& str) {
+    if (str == "ALLOW") return ActionType::ALLOW;
+    if (str == "DENY") return ActionType::DENY;
+    if (str == "QUARANTINE") return ActionType::QUARANTINE;
+    if (str == "ALERT_ONLY") return ActionType::ALERT_ONLY;
+    if (str == "CUSTOM") return ActionType::CUSTOM;
+    return ActionType::ALLOW; // default fallback
 }
 
 } // namespace HIPS
