@@ -61,7 +61,6 @@ inline void GetSystemTime(SYSTEMTIME* st) {
 #include <cstring>
 #include <thread>
 #define INVALID_HANDLE_VALUE    ((HANDLE)-1)
-#define NULL                    nullptr
 #define WCHAR                   wchar_t
 #define CP_UTF8                 65001
 #define MAX_PATH                260
@@ -89,6 +88,7 @@ inline void GetSystemTime(SYSTEMTIME* st) {
 #define FILE_ACTION_RENAMED_NEW_NAME    0x00000005
 #define PROCESS_QUERY_INFORMATION   0x0400
 #define PROCESS_VM_READ             0x0010
+// NOTE: error reporting stubs always return success/0 on non-Windows builds
 inline DWORD GetLastError()         { return 0; }
 inline BOOL  CancelIo(HANDLE)       { return TRUE; }
 inline BOOL  CloseHandle(HANDLE)    { return TRUE; }

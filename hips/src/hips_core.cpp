@@ -243,11 +243,9 @@ bool HIPSEngine::Stop() {
 }
 
 bool HIPSEngine::Shutdown() {
-    // Call Stop() before acquiring state_mutex_ to avoid deadlock,
-    // since Stop() also acquires state_mutex_.
-    if (running_.load()) {
-        Stop();
-    }
+    // Stop() is idempotent and acquires state_mutex_ itself, so it must be
+    // called before we take the lock to avoid a deadlock.
+    Stop();
 
     std::lock_guard<std::mutex> lock(state_mutex_);
 
@@ -464,7 +462,8 @@ void HIPSEngine::UnregisterEventHandler(EventType type) {
     event_handlers_.erase(type);
 }
 
-bool HIPSEngine::EnableLearningMode(bool /*enable*/) {
+bool HIPSEngine::EnableLearningMode(bool enable) {
+    (void)enable;
     // Learning mode records observed behavior to auto-generate rules.
     // Full implementation requires persistent storage; stub returns true.
     return true;
