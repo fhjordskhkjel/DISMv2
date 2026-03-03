@@ -9,7 +9,9 @@
 #define DRIVER_INTERFACE_H
 
 #include "hips_core.h"
+#ifdef _WIN32
 #include <Windows.h>
+#endif
 
 namespace HIPS {
 
