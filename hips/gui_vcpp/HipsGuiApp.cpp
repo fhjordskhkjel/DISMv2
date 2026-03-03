@@ -15,7 +15,6 @@ END_MESSAGE_MAP()
 
 CHipsGuiApp::CHipsGuiApp()
 {
-	// TODO: add construction code here
 	// Place all significant initialization in InitInstance
 }
 

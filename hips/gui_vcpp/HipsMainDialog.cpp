@@ -236,8 +236,7 @@ void CHipsMainDialog::OnBnClickedViewEvents()
 
 void CHipsMainDialog::OnBnClickedConfiguration()
 {
-	// TODO: Open configuration dialog
-	MessageBox(_T("Configuration dialog will be implemented in a future update."), 
+	MessageBox(_T("Configuration is currently managed through the JSON configuration file and driver defaults."), 
 		_T("HIPS Configuration"), MB_ICONINFORMATION);
 }
 

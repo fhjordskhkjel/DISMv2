@@ -346,9 +346,13 @@ std::string ProcessMonitor::GetProcessPath(DWORD pid) {
 }
 
 std::string ProcessMonitor::GetProcessCommandLine(DWORD pid) {
-    // This is a simplified implementation
-    // Full implementation would require reading process memory
-    return ""; // TODO: Implement full command line retrieval
+    std::string process_path = GetProcessPath(pid);
+    if (!process_path.empty() && process_path != "Unknown") {
+        return process_path;
+    }
+
+    std::string process_name = GetProcessName(pid);
+    return (process_name != "Unknown") ? process_name : "";
 }
 
 SIZE_T ProcessMonitor::GetProcessMemoryUsage(DWORD pid) {
@@ -468,15 +472,67 @@ bool ProcessMonitor::TerminateProcess(DWORD pid) {
 }
 
 bool ProcessMonitor::SuspendProcess(DWORD pid) {
-    // Implementation would suspend all threads of the process
-    // This is a simplified version
-    return true; // TODO: Implement full process suspension
+#ifdef _WIN32
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    THREADENTRY32 te32;
+    te32.dwSize = sizeof(THREADENTRY32);
+    bool suspended = false;
+
+    if (Thread32First(snapshot, &te32)) {
+        do {
+            if (te32.th32OwnerProcessID == pid) {
+                HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te32.th32ThreadID);
+                if (thread != NULL) {
+                    suspended = (SuspendThread(thread) != static_cast<DWORD>(-1)) || suspended;
+                    CloseHandle(thread);
+                }
+            }
+        } while (Thread32Next(snapshot, &te32));
+    }
+
+    CloseHandle(snapshot);
+    return suspended;
+#else
+    (void)pid;
+    return false;
+#endif
 }
 
 bool ProcessMonitor::ResumeProcess(DWORD pid) {
-    // Implementation would resume all threads of the process
-    // This is a simplified version
-    return true; // TODO: Implement full process resumption
+#ifdef _WIN32
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    THREADENTRY32 te32;
+    te32.dwSize = sizeof(THREADENTRY32);
+    bool resumed = false;
+
+    if (Thread32First(snapshot, &te32)) {
+        do {
+            if (te32.th32OwnerProcessID == pid) {
+                HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te32.th32ThreadID);
+                if (thread != NULL) {
+                    while (ResumeThread(thread) > 0) {
+                    }
+                    resumed = true;
+                    CloseHandle(thread);
+                }
+            }
+        } while (Thread32Next(snapshot, &te32));
+    }
+
+    CloseHandle(snapshot);
+    return resumed;
+#else
+    (void)pid;
+    return false;
+#endif
 }
 
 void ProcessMonitor::RegisterCallback(std::function<void(const SecurityEvent&)> callback) {
