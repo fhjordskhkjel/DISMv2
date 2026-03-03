@@ -346,6 +346,7 @@ std::string ProcessMonitor::GetProcessPath(DWORD pid) {
 }
 
 std::string ProcessMonitor::GetProcessCommandLine(DWORD pid) {
+    // Best-effort fallback: full command line retrieval requires reading remote process memory.
     std::string process_path = GetProcessPath(pid);
     if (!process_path.empty() && process_path != "Unknown") {
         return process_path;
@@ -480,22 +481,28 @@ bool ProcessMonitor::SuspendProcess(DWORD pid) {
 
     THREADENTRY32 te32;
     te32.dwSize = sizeof(THREADENTRY32);
-    bool suspended = false;
+    bool foundThreads = false;
+    bool allSuspended = true;
 
     if (Thread32First(snapshot, &te32)) {
         do {
             if (te32.th32OwnerProcessID == pid) {
+                foundThreads = true;
                 HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te32.th32ThreadID);
                 if (thread != NULL) {
-                    suspended = (SuspendThread(thread) != static_cast<DWORD>(-1)) || suspended;
+                    if (SuspendThread(thread) == static_cast<DWORD>(-1)) {
+                        allSuspended = false;
+                    }
                     CloseHandle(thread);
+                } else {
+                    allSuspended = false;
                 }
             }
         } while (Thread32Next(snapshot, &te32));
     }
 
     CloseHandle(snapshot);
-    return suspended;
+    return foundThreads && allSuspended;
 #else
     (void)pid;
     return false;
@@ -518,7 +525,8 @@ bool ProcessMonitor::ResumeProcess(DWORD pid) {
             if (te32.th32OwnerProcessID == pid) {
                 HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te32.th32ThreadID);
                 if (thread != NULL) {
-                    while (ResumeThread(thread) > 0) {
+                    // Drain the suspend count back to runnable state.
+                    for (int i = 0; i < 1024 && ResumeThread(thread) > 0; ++i) {
                     }
                     resumed = true;
                     CloseHandle(thread);

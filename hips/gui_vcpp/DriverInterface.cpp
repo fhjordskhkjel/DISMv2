@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "DriverInterface.h"
 #include <winioctl.h>
+#include <exception>
+#include <limits>
 
 // Driver IOCTL codes (must match driver definitions)
 #define HIPS_DEVICE_TYPE 0x8000
@@ -175,8 +177,12 @@ BOOL CDriverInterface::SendConfigurationToDriver(const std::map<std::string, std
             return defaultValue;
         }
         try {
-            return static_cast<DWORD>(std::stoul(it->second));
-        } catch (...) {
+            const unsigned long parsed = std::stoul(it->second);
+            if (parsed > static_cast<unsigned long>(std::numeric_limits<DWORD>::max())) {
+                return defaultValue;
+            }
+            return static_cast<DWORD>(parsed);
+        } catch (const std::exception&) {
             return defaultValue;
         }
     };
