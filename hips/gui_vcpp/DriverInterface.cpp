@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "DriverInterface.h"
 #include <winioctl.h>
+#include <exception>
+#include <limits>
 
 // Driver IOCTL codes (must match driver definitions)
 #define HIPS_DEVICE_TYPE 0x8000
@@ -22,6 +24,17 @@ typedef struct _DRIVER_EVENT {
     WCHAR ProcessPath[260];
     CHAR AdditionalData[512];
 } DRIVER_EVENT, *PDRIVER_EVENT;
+
+typedef struct _DRIVER_CONFIG {
+    BOOLEAN MonitorFileSystem;
+    BOOLEAN MonitorProcesses;
+    BOOLEAN MonitorRegistry;
+    BOOLEAN MonitorNetwork;
+    BOOLEAN MonitorMemory;
+    DWORD MinimumThreatLevel;
+    DWORD MaxEventQueueSize;
+    DWORD EventTimeoutMs;
+} DRIVER_CONFIG, *PDRIVER_CONFIG;
 #pragma pack(pop)
 
 CDriverInterface::CDriverInterface()
@@ -144,9 +157,47 @@ BOOL CDriverInterface::GetEventsFromDriver(std::vector<SecurityEvent>& events)
 
 BOOL CDriverInterface::SendConfigurationToDriver(const std::map<std::string, std::string>& config)
 {
-    // TODO: Implement configuration sending
-    UNREFERENCED_PARAMETER(config);
-    return FALSE;
+    if (!IsConnected()) {
+        return FALSE;
+    }
+
+    DRIVER_CONFIG driverConfig = {};
+
+    auto getBool = [&config](const std::string& key, bool defaultValue) -> BOOLEAN {
+        auto it = config.find(key);
+        if (it == config.end()) {
+            return defaultValue ? TRUE : FALSE;
+        }
+        return (it->second == "true" || it->second == "1") ? TRUE : FALSE;
+    };
+
+    auto getDword = [&config](const std::string& key, DWORD defaultValue) -> DWORD {
+        auto it = config.find(key);
+        if (it == config.end()) {
+            return defaultValue;
+        }
+        try {
+            const unsigned long parsed = std::stoul(it->second);
+            if (parsed > static_cast<unsigned long>(std::numeric_limits<DWORD>::max())) {
+                return defaultValue;
+            }
+            return static_cast<DWORD>(parsed);
+        } catch (const std::exception&) {
+            return defaultValue;
+        }
+    };
+
+    driverConfig.MonitorFileSystem = getBool("monitor_filesystem", true);
+    driverConfig.MonitorProcesses = getBool("monitor_processes", true);
+    driverConfig.MonitorRegistry = getBool("monitor_registry", true);
+    driverConfig.MonitorNetwork = getBool("monitor_network", true);
+    driverConfig.MonitorMemory = getBool("monitor_memory", true);
+    driverConfig.MinimumThreatLevel = getDword("minimum_threat_level", 1);
+    driverConfig.MaxEventQueueSize = getDword("max_event_queue_size", 1000);
+    driverConfig.EventTimeoutMs = getDword("event_timeout_ms", 5000);
+
+    return SendControlCode(IOCTL_HIPS_SET_CONFIG,
+                          &driverConfig, sizeof(driverConfig));
 }
 
 BOOL CDriverInterface::SendControlCode(DWORD controlCode, 
