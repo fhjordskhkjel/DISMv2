@@ -35,6 +35,8 @@ dotnet run --configuration Release
 
 ### Main Menu Options
 
+You can select menu entries by **number** (for example `1`) or by **command key** (for example `general`, `monitoring`, `save`).
+
 1. **General Settings**: Configure real-time protection, startup scan, log levels, and scan intervals
 2. **Monitoring Settings**: Manage file and process monitoring options
 3. **Status & Control**: View driver status and control driver services (Windows only)
