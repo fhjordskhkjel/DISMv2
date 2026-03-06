@@ -29,12 +29,13 @@ namespace HipsConfigTool.Services
                 var command = _commandRegistry.GetCommand(commands[i]);
                 if (command != null)
                 {
-                    Console.WriteLine($"{i + 1}. {command.DisplayName}");
+                    Console.WriteLine($"{i + 1}. {command.DisplayName} [{commands[i]}]");
+                    Console.WriteLine($"   {command.Description}");
                 }
             }
             
-            Console.WriteLine("0. Exit");
-            Console.Write("\nSelect option: ");
+            Console.WriteLine("0. Exit [exit]");
+            Console.Write("\nSelect option (number or command key): ");
         }
 
         /// <summary>
@@ -71,7 +72,20 @@ namespace HipsConfigTool.Services
             }
             else
             {
-                Console.WriteLine("Invalid option. Please try again.");
+                var commandKey = choice?.ToLowerInvariant();
+                if (!string.IsNullOrWhiteSpace(commandKey) && _commandRegistry.HasCommand(commandKey))
+                {
+                    var success = _commandRegistry.ExecuteCommand(commandKey);
+
+                    if (!success)
+                    {
+                        Console.WriteLine("Command execution failed or is not available.");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("Invalid option. Please try again.");
+                }
             }
 
             return true;
