@@ -32,19 +32,21 @@ echo Checking for required tools...
 REM Check for WDK and Visual Studio
 where msbuild >nul 2>&1
 if !errorlevel! neq 0 (
-    echo ERROR: MSBuild not found. Please install Visual Studio 2022 with C++ workload.
+    echo ERROR: MSBuild not found. Please install Visual Studio 2026 or 2022 with C++ workload.
     pause
     exit /b 1
 )
 echo ✓ MSBuild found
 
 REM Check for WDK
-if not exist "%ProgramFiles(x86)%\Windows Kits\10\Vsix\VS2022\WDK.vsix" (
-    if not exist "%ProgramFiles(x86)%\Windows Kits\10\build\WindowsDriver.Cpp.targets" (
-        echo WARNING: Windows Driver Kit (WDK) may not be installed.
-        echo Please install WDK for Visual Studio 2022 for kernel driver compilation.
-        echo Continuing with user-mode build only...
-        goto :usermode_only
+if not exist "%ProgramFiles(x86)%\Windows Kits\10\Vsix\VS2026\WDK.vsix" (
+    if not exist "%ProgramFiles(x86)%\Windows Kits\10\Vsix\VS2022\WDK.vsix" (
+        if not exist "%ProgramFiles(x86)%\Windows Kits\10\build\WindowsDriver.Cpp.targets" (
+            echo WARNING: Windows Driver Kit (WDK) may not be installed.
+            echo Please install WDK for Visual Studio 2026 or 2022 for kernel driver compilation.
+            echo Continuing with user-mode build only...
+            goto :usermode_only
+        )
     )
 )
 echo ✓ Windows Driver Kit found
@@ -69,6 +71,25 @@ cd ..
 echo.
 echo Building user-mode application...
 
+set VS_GENERATOR=
+set VS_VERSION=
+set VS_MAJOR=
+
+if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" (
+    for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.Component.MSBuild -property installationVersion`) do (
+        set VS_VERSION=%%i
+    )
+
+    if defined VS_VERSION (
+        for /f "tokens=1 delims=." %%i in ("!VS_VERSION!") do (
+            set VS_MAJOR=%%i
+        )
+    )
+
+    if "!VS_MAJOR!"=="18" set VS_GENERATOR=Visual Studio 18 2026
+    if "!VS_MAJOR!"=="17" set VS_GENERATOR=Visual Studio 17 2022
+)
+
 REM Create and enter build directory
 if exist !BUILD_DIR! (
     echo Cleaning existing build directory...
@@ -79,7 +100,13 @@ mkdir !BUILD_DIR!
 cd !BUILD_DIR!
 
 echo Configuring project with CMake...
-cmake .. -G "Visual Studio 17 2022" -A !ARCH! -DCMAKE_BUILD_TYPE=!BUILD_TYPE!
+if defined VS_GENERATOR (
+    echo Using CMake generator: !VS_GENERATOR!
+    cmake .. -G "!VS_GENERATOR!" -A !ARCH! -DCMAKE_BUILD_TYPE=!BUILD_TYPE!
+) else (
+    echo Visual Studio generator not detected via vswhere, using CMake default generator.
+    cmake .. -DCMAKE_BUILD_TYPE=!BUILD_TYPE!
+)
 if !errorlevel! neq 0 (
     echo ERROR: CMake configuration failed.
     cd ..
