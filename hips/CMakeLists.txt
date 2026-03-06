@@ -5,13 +5,12 @@ project(HIPS VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Visual Studio 2022 compatibility
+# Visual Studio compatibility
 if(MSVC)
-    # Set Visual Studio 2022 toolset
-    set(CMAKE_GENERATOR_TOOLSET "v143" CACHE STRING "Platform Toolset" FORCE)
+    # Let the active Visual Studio version choose the default toolset
     # Ensure compatibility with Windows 10/11
     add_definitions(-D_WIN32_WINNT=0x0A00)  # Windows 10 minimum for kernel driver compatibility
-    # Use dynamic runtime for VS2022
+    # Use dynamic runtime for MSVC
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
 
@@ -28,7 +27,7 @@ endif()
 
 # Compiler-specific options
 if(MSVC)
-    # Visual Studio 2022 specific options
+    # Visual Studio specific options
     add_compile_options(/W4)  # Removed /WX to allow warnings during development
     add_compile_options(/std:c++17)
     # Enable kernel driver communication support

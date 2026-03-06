@@ -1,6 +1,6 @@
 @echo off
 REM Enhanced Build Script for HIPS GUI (VC++)
-REM Optimized for Visual Studio 2022 with enhanced error detection and recovery
+REM Optimized for Visual Studio with enhanced error detection and recovery
 
 echo ===============================================
 echo   HIPS GUI Build Script - VC++ Enhanced
@@ -13,46 +13,65 @@ color 0F
 echo Checking build environment...
 echo.
 
-REM Check for Visual Studio 2022 installations
-set VS2022_FOUND=0
+REM Check for Visual Studio installations
+set VS_FOUND=0
 set MSBUILD_PATH=""
 
+REM Check Visual Studio 2026
+if exist "C:\Program Files\Microsoft Visual Studio\2026\Professional\MSBuild\Current\Bin\MSBuild.exe" (
+    set MSBUILD_PATH="C:\Program Files\Microsoft Visual Studio\2026\Professional\MSBuild\Current\Bin\MSBuild.exe"
+    set VS_FOUND=1
+    echo ✓ Visual Studio 2026 Professional found
+)
+
+if exist "C:\Program Files\Microsoft Visual Studio\2026\Community\MSBuild\Current\Bin\MSBuild.exe" (
+    set MSBUILD_PATH="C:\Program Files\Microsoft Visual Studio\2026\Community\MSBuild\Current\Bin\MSBuild.exe"
+    set VS_FOUND=1
+    echo ✓ Visual Studio 2026 Community found
+)
+
+if exist "C:\Program Files\Microsoft Visual Studio\2026\Enterprise\MSBuild\Current\Bin\MSBuild.exe" (
+    set MSBUILD_PATH="C:\Program Files\Microsoft Visual Studio\2026\Enterprise\MSBuild\Current\Bin\MSBuild.exe"
+    set VS_FOUND=1
+    echo ✓ Visual Studio 2026 Enterprise found
+)
+
 REM Check Professional/Enterprise
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe" (
+if %VS_FOUND%==0 if exist "C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe" (
     set MSBUILD_PATH="C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe"
-    set VS2022_FOUND=1
+    set VS_FOUND=1
     echo ✓ Visual Studio 2022 Professional found
 )
 
 REM Check Community
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" (
+if %VS_FOUND%==0 if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" (
     set MSBUILD_PATH="C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
-    set VS2022_FOUND=1
+    set VS_FOUND=1
     echo ✓ Visual Studio 2022 Community found
 )
 
 REM Check Enterprise
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" (
+if %VS_FOUND%==0 if exist "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" (
     set MSBUILD_PATH="C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe"
-    set VS2022_FOUND=1
+    set VS_FOUND=1
     echo ✓ Visual Studio 2022 Enterprise found
 )
 
 REM Fallback to PATH-based MSBuild detection
-if %VS2022_FOUND%==0 (
+if %VS_FOUND%==0 (
     where msbuild >nul 2>&1
     if %errorlevel% equ 0 (
         set MSBUILD_PATH=msbuild
-        set VS2022_FOUND=1
+        set VS_FOUND=1
         echo ✓ MSBuild found in PATH
     )
 )
 
-if %VS2022_FOUND%==0 (
+if %VS_FOUND%==0 (
     echo.
-    echo ❌ ERROR: Visual Studio 2022 not found!
+    echo ❌ ERROR: Visual Studio not found!
     echo.
-    echo Please install Visual Studio 2022 with the following components:
+    echo Please install Visual Studio 2026 or 2022 with the following components:
     echo   • C++ Desktop Development workload
     echo   • Windows 10/11 SDK
     echo   • MFC and ATL support
@@ -69,6 +88,11 @@ REM Check for MFC support
 echo Checking for MFC support...
 set MFC_FOUND=0
 for /f "tokens=*" %%i in ('dir /s /b "C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\atlmfc\include\afx.h" 2^>nul') do (
+    set MFC_FOUND=1
+    echo ✓ MFC support found
+    goto mfc_check_done
+)
+for /f "tokens=*" %%i in ('dir /s /b "C:\Program Files\Microsoft Visual Studio\2026\*\VC\Tools\MSVC\*\atlmfc\include\afx.h" 2^>nul') do (
     set MFC_FOUND=1
     echo ✓ MFC support found
     goto mfc_check_done
@@ -147,7 +171,7 @@ echo   3. Click "Connect Driver" to establish communication
 echo.
 
 echo For development:
-echo   • Open HipsGui.sln in Visual Studio 2022
+echo   • Open HipsGui.vcxproj in Visual Studio 2026 or 2022
 echo   • Use Debug configuration for development
 echo   • Refer to README.md for complete setup instructions
 echo.
