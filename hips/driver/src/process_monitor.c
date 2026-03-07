@@ -156,8 +156,6 @@ VOID HipsProcessNotifyCallback(
             ExFreePool(imageName);
             imageName = NULL;
         }
-        
-        HipsDbgPrint("Process terminated - PID: %lu\n", processInfo.ProcessId);
     }
     
     // Add event to queue

@@ -277,6 +277,11 @@ void HIPSEngine::ShutdownComponents() {
 }
 
 void HIPSEngine::ProcessSecurityEvent(const SecurityEvent& event) {
+    const bool suppress_process_log =
+        (event.type == EventType::PROCESS_CREATION || event.type == EventType::PROCESS_TERMINATION) &&
+        event.process_path.empty() &&
+        event.description.empty();
+
     // Update statistics
     UpdateStatistics(event);
     
@@ -286,7 +291,7 @@ void HIPSEngine::ProcessSecurityEvent(const SecurityEvent& event) {
     }
     
     // Log the event
-    if (log_manager_) {
+    if (log_manager_ && !suppress_process_log) {
         std::ostringstream oss;
         oss << "Security Event: " << EventTypeToString(event.type)
             << " | Threat Level: " << ThreatLevelToString(event.threat_level)

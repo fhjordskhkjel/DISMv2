@@ -10,6 +10,38 @@
 
 namespace HIPS {
 
+namespace {
+
+bool IsUnknownProcessValue(const std::string& value) {
+    return value.empty() || value == "Unknown";
+}
+
+std::string GetProcessDisplayName(const ProcessInfo& process) {
+    if (!IsUnknownProcessValue(process.name)) {
+        return process.name;
+    }
+
+    if (!IsUnknownProcessValue(process.path)) {
+        return process.path;
+    }
+
+    return "";
+}
+
+std::string GetProcessDisplayPath(const ProcessInfo& process) {
+    if (!IsUnknownProcessValue(process.path)) {
+        return process.path;
+    }
+
+    if (!IsUnknownProcessValue(process.name)) {
+        return process.name;
+    }
+
+    return "";
+}
+
+} // namespace
+
 ProcessMonitor::ProcessMonitor() 
     : running_(false), initialized_(false), scan_interval_(1000), memory_threshold_(500 * 1024 * 1024) {
     
@@ -282,26 +314,31 @@ bool ProcessMonitor::IsSystemProcess(const ProcessInfo& process) {
 
 SecurityEvent ProcessMonitor::CreateProcessEvent(const ProcessInfo& process, EventType type) {
     SecurityEvent event;
+    const std::string display_name = GetProcessDisplayName(process);
+    const std::string display_path = GetProcessDisplayPath(process);
+
     event.type = type;
     event.threat_level = process.threat_level;
     event.process_id = process.pid;
-    event.process_path = process.path;
+    event.process_path = display_path;
     event.target_path = "";
     event.thread_id = 0;
     event.timestamp = process.creation_time;
     
     // Add metadata
-    event.metadata["process_name"] = process.name;
+    event.metadata["process_name"] = IsUnknownProcessValue(process.name) ? "" : process.name;
     event.metadata["parent_pid"] = std::to_string(process.parent_pid);
     event.metadata["thread_count"] = std::to_string(process.thread_count);
     event.metadata["memory_usage"] = std::to_string(process.memory_usage);
     event.metadata["is_system_process"] = process.is_system_process ? "true" : "false";
     event.metadata["command_line"] = process.command_line;
     
-    if (type == EventType::PROCESS_CREATION) {
-        event.description = "New process created: " + process.name;
-    } else if (type == EventType::PROCESS_TERMINATION) {
-        event.description = "Process terminated: " + process.name;
+    if (!display_name.empty()) {
+        if (type == EventType::PROCESS_CREATION) {
+            event.description = "New process created: " + display_name;
+        } else if (type == EventType::PROCESS_TERMINATION) {
+            event.description = "Process terminated: " + display_name;
+        }
     }
     
     return event;
