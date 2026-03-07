@@ -10,6 +10,32 @@
 
 namespace HIPS {
 
+namespace {
+
+constexpr char kUnknownProcessValue[] = "Unknown";
+
+bool IsUnknownProcessValue(const std::string& value) {
+    return value.empty() || value == kUnknownProcessValue;
+}
+
+std::string GetProcessDisplayValue(const ProcessInfo& process, bool prefer_name) {
+    const std::string& primary = prefer_name ? process.name : process.path;
+    const std::string& fallback = prefer_name ? process.path : process.name;
+
+    if (!IsUnknownProcessValue(primary)) {
+        return primary;
+    }
+
+    if (!IsUnknownProcessValue(fallback)) {
+        return fallback;
+    }
+
+    // An empty result means there is no usable process identity to surface or log.
+    return "";
+}
+
+} // namespace
+
 ProcessMonitor::ProcessMonitor() 
     : running_(false), initialized_(false), scan_interval_(1000), memory_threshold_(500 * 1024 * 1024) {
     
@@ -282,26 +308,31 @@ bool ProcessMonitor::IsSystemProcess(const ProcessInfo& process) {
 
 SecurityEvent ProcessMonitor::CreateProcessEvent(const ProcessInfo& process, EventType type) {
     SecurityEvent event;
+    const std::string display_name = GetProcessDisplayValue(process, true);
+    const std::string display_path = GetProcessDisplayValue(process, false);
+
     event.type = type;
     event.threat_level = process.threat_level;
     event.process_id = process.pid;
-    event.process_path = process.path;
+    event.process_path = display_path;
     event.target_path = "";
     event.thread_id = 0;
     event.timestamp = process.creation_time;
     
     // Add metadata
-    event.metadata["process_name"] = process.name;
+    event.metadata["process_name"] = IsUnknownProcessValue(process.name) ? "" : process.name;
     event.metadata["parent_pid"] = std::to_string(process.parent_pid);
     event.metadata["thread_count"] = std::to_string(process.thread_count);
     event.metadata["memory_usage"] = std::to_string(process.memory_usage);
     event.metadata["is_system_process"] = process.is_system_process ? "true" : "false";
     event.metadata["command_line"] = process.command_line;
     
-    if (type == EventType::PROCESS_CREATION) {
-        event.description = "New process created: " + process.name;
-    } else if (type == EventType::PROCESS_TERMINATION) {
-        event.description = "Process terminated: " + process.name;
+    if (!display_name.empty()) {
+        if (type == EventType::PROCESS_CREATION) {
+            event.description = "New process created: " + display_name;
+        } else if (type == EventType::PROCESS_TERMINATION) {
+            event.description = "Process terminated: " + display_name;
+        }
     }
     
     return event;
@@ -310,7 +341,7 @@ SecurityEvent ProcessMonitor::CreateProcessEvent(const ProcessInfo& process, Eve
 std::string ProcessMonitor::GetProcessName(DWORD pid) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
-        return "Unknown";
+        return kUnknownProcessValue;
     }
 
     PROCESSENTRY32 pe32;
@@ -326,13 +357,13 @@ std::string ProcessMonitor::GetProcessName(DWORD pid) {
     }
 
     CloseHandle(snapshot);
-    return "Unknown";
+    return kUnknownProcessValue;
 }
 
 std::string ProcessMonitor::GetProcessPath(DWORD pid) {
     HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
     if (process == NULL) {
-        return "Unknown";
+        return kUnknownProcessValue;
     }
 
     char path[MAX_PATH];
@@ -342,7 +373,7 @@ std::string ProcessMonitor::GetProcessPath(DWORD pid) {
     if (size > 0) {
         return std::string(path);
     }
-    return "Unknown";
+    return kUnknownProcessValue;
 }
 
 std::string ProcessMonitor::GetProcessCommandLine(DWORD pid) {
