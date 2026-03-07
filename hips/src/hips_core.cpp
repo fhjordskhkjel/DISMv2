@@ -283,7 +283,8 @@ void HIPSEngine::ProcessSecurityEvent(const SecurityEvent& event) {
         !process_name_it->second.empty();
 
     // ProcessMonitor clears these fields when neither a usable process name
-    // nor image/path is available, so suppress those log-only noise events.
+    // nor image/path is available, and leaves description empty in that case,
+    // so suppress those log-only noise events.
     const bool suppress_process_log =
         (event.type == EventType::PROCESS_CREATION || event.type == EventType::PROCESS_TERMINATION) &&
         event.process_path.empty() &&

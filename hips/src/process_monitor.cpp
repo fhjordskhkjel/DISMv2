@@ -30,6 +30,7 @@ std::string GetProcessDisplayValue(const ProcessInfo& process, bool prefer_name)
         return fallback;
     }
 
+    // An empty result means there is no usable process identity to surface or log.
     return "";
 }
 
