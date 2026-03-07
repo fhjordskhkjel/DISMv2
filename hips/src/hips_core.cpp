@@ -277,9 +277,17 @@ void HIPSEngine::ShutdownComponents() {
 }
 
 void HIPSEngine::ProcessSecurityEvent(const SecurityEvent& event) {
+    const auto process_name_it = event.metadata.find("process_name");
+    const bool has_process_name =
+        process_name_it != event.metadata.end() &&
+        !process_name_it->second.empty();
+
+    // ProcessMonitor clears these fields when neither a usable process name
+    // nor image/path is available, so suppress those log-only noise events.
     const bool suppress_process_log =
         (event.type == EventType::PROCESS_CREATION || event.type == EventType::PROCESS_TERMINATION) &&
         event.process_path.empty() &&
+        !has_process_name &&
         event.description.empty();
 
     // Update statistics

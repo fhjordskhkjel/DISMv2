@@ -12,29 +12,22 @@ namespace HIPS {
 
 namespace {
 
+constexpr char kUnknownProcessValue[] = "Unknown";
+
 bool IsUnknownProcessValue(const std::string& value) {
-    return value.empty() || value == "Unknown";
+    return value.empty() || value == kUnknownProcessValue;
 }
 
-std::string GetProcessDisplayName(const ProcessInfo& process) {
-    if (!IsUnknownProcessValue(process.name)) {
-        return process.name;
+std::string GetProcessDisplayValue(const ProcessInfo& process, bool prefer_name) {
+    const std::string& primary = prefer_name ? process.name : process.path;
+    const std::string& fallback = prefer_name ? process.path : process.name;
+
+    if (!IsUnknownProcessValue(primary)) {
+        return primary;
     }
 
-    if (!IsUnknownProcessValue(process.path)) {
-        return process.path;
-    }
-
-    return "";
-}
-
-std::string GetProcessDisplayPath(const ProcessInfo& process) {
-    if (!IsUnknownProcessValue(process.path)) {
-        return process.path;
-    }
-
-    if (!IsUnknownProcessValue(process.name)) {
-        return process.name;
+    if (!IsUnknownProcessValue(fallback)) {
+        return fallback;
     }
 
     return "";
@@ -314,8 +307,8 @@ bool ProcessMonitor::IsSystemProcess(const ProcessInfo& process) {
 
 SecurityEvent ProcessMonitor::CreateProcessEvent(const ProcessInfo& process, EventType type) {
     SecurityEvent event;
-    const std::string display_name = GetProcessDisplayName(process);
-    const std::string display_path = GetProcessDisplayPath(process);
+    const std::string display_name = GetProcessDisplayValue(process, true);
+    const std::string display_path = GetProcessDisplayValue(process, false);
 
     event.type = type;
     event.threat_level = process.threat_level;
@@ -347,7 +340,7 @@ SecurityEvent ProcessMonitor::CreateProcessEvent(const ProcessInfo& process, Eve
 std::string ProcessMonitor::GetProcessName(DWORD pid) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
-        return "Unknown";
+        return kUnknownProcessValue;
     }
 
     PROCESSENTRY32 pe32;
@@ -363,13 +356,13 @@ std::string ProcessMonitor::GetProcessName(DWORD pid) {
     }
 
     CloseHandle(snapshot);
-    return "Unknown";
+    return kUnknownProcessValue;
 }
 
 std::string ProcessMonitor::GetProcessPath(DWORD pid) {
     HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
     if (process == NULL) {
-        return "Unknown";
+        return kUnknownProcessValue;
     }
 
     char path[MAX_PATH];
@@ -379,7 +372,7 @@ std::string ProcessMonitor::GetProcessPath(DWORD pid) {
     if (size > 0) {
         return std::string(path);
     }
-    return "Unknown";
+    return kUnknownProcessValue;
 }
 
 std::string ProcessMonitor::GetProcessCommandLine(DWORD pid) {
